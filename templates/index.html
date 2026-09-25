@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Garmin Trends Analyzer</title>
+    <!-- Biblioteki ładowane z CDN dla oszczędności transferu na mikr.us -->
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #f4f4f9; 
+            max-width: 900px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            color: #333;
+        }
+        h1 { text-align: center; color: #2c3e50; }
+        .card { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
+            margin-bottom: 25px; 
+        }
+        .grid-2 { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr; 
+            gap: 15px; 
+        }
+        @media (max-width: 600px) {
+            .grid-2 { grid-template-columns: 1fr; gap: 10px; }
+        }
+        label { font-size: 0.9em; color: #666; font-weight: bold; display: block; margin-bottom: 5px; }
+        input { 
+            padding: 10px; 
+            width: 100%; 
+            box-sizing: border-box; 
+            border: 1px solid #ccc; 
+            border-radius: 6px; 
+        }
+        input:focus { outline: none; border-color: #1f77b4; }
+        button { 
+            background: #1f77b4; 
+            color: white; 
+            border: none; 
+            cursor: pointer; 
+            font-weight: bold; 
+            padding: 12px; 
+            width: 100%; 
+            border-radius: 6px;
+            margin-top: 20px;
+            transition: background 0.3s;
+        }
+        button:hover { background: #155a8a; }
+        .btn-danger { background: #d62728; margin-top: 10px; }
+        .btn-danger:hover { background: #a81c1d; }
+        .info-box {
+            background: #e6f2ff; 
+            border-left: 4px solid #1f77b4; 
+            padding: 15px;
+            border-radius: 4px;
+        }
+        .chart-container { height: 400px; width: 100%; }
+    </style>
+</head>
+<body>
+
+    <div x-data="dashboard()">
+        <h1>Analizator Formy Biegowej</h1>
+        
+        <!-- Sekcja Formularza (Widoczna przed pobraniem danych) -->
+        <div class="card" x-show="!dataLoaded && !loading">
+            <p style="text-align: center; color: #555; margin-bottom: 20px;">
+                Zaloguj się do Garmin Connect, aby wygenerować analizę. <br>
+                <small>(Twoje hasło jest przetwarzane tylko w pamięci RAM i nigdy nie jest zapisywane na dysku serwera).</small>
+            </p>
+            
+            <form @submit.prevent="fetchData">
+                <div class="grid-2">
+                    <div>
+                        <label>Email Garmin Connect</label>
+                        <input type="email" x-model="email" placeholder="Wpisz adres e-mail" required>
+                    </div>
+                    <div>
+                        <label>Hasło</label>
+                        <input type="password" x-model="password" placeholder="Wpisz hasło" required>
+                    </div>
+                </div>
+                
+                <div class="grid-2" style="margin-top: 15px;">
+                    <div>
+                        <label>Od kiedy analizować?</label>
+                        <input type="date" x-model="startDate" required>
+                    </div>
+                    <div>
+                        <label>Do kiedy analizować?</label>
+                        <input type="date" x-model="endDate" required>
+                    </div>
+                </div>
+
+                <div class="grid-2" style="margin-top: 15px;">
+                    <div>
+                        <label>Tętno spoczynkowe (zostaw puste dla Auto):</label>
+                        <input type="number" x-model="hrRest" placeholder="Wykryj automatycznie">
+                    </div>
+                    <div>
+                        <label>Tętno maksymalne (zostaw puste dla Auto):</label>
+                        <input type="number" x-model="hrMax" placeholder="Wykryj automatycznie">
+                    </div>
+                </div>
+
+                <button type="submit">Generuj Dashboard</button>
+            </form>
+            
+            <div x-show="error" style="color: #d62728; background: #ffe6e6; padding: 10px; border-radius: 6px; margin-top: 15px; text-align: center;" x-text="error"></div>
+        </div>
+
+        <!-- Ekran Ładowania -->
+        <div class="card" x-show="loading" style="text-align: center; padding: 40px 20px;">
+            <h3>🔄 Łączenie z API Garmina...</h3>
+            <p style="color: #666;">Pobieranie aktywności, przeliczanie punktów TRIMP i budowanie modeli.<br>To może potrwać kilkanaście sekund, proszę czekać.</p>
+        </div>
+        
+        <!-- Sekcja Wyników i Wykresów -->
+        <div x-show="dataLoaded" style="display: none;">
+            
+            <!-- Panel Informacyjny -->
+            <div class="card info-box">
+                <p style="margin: 0; font-size: 0.95em;">
+                    <strong>Fizjologia przyjęta do obliczeń TRIMP:</strong><br>
+                    Tętno spoczynkowe: <span x-text="debug.hr_rest"></span> BPM | 
+                    Tętno maksymalne: <span x-text="debug.hr_max"></span> BPM
+                </p>
+            </div>
+
+            <!-- Kontenery na wykresy Plotly -->
+            <div class="card"><div id="chart-endurance" class="chart-container"></div></div>
+            <div class="card"><div id="chart-ef" class="chart-container"></div></div>
+            <div class="card"><div id="chart-pow" class="chart-container"></div></div>
+            <div class="card"><div id="chart-hr" class="chart-container"></div></div>
+            <div class="card"><div id="chart-pace" class="chart-container"></div></div>
+            
+            <button @click="reset()" class="btn-danger">Zakończ analizę (Wyczyść widok i wyloguj)</button>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('alpine:init', () => {
+            // Funkcja pomocnicza do ustawiania domyślnych dat
+            const getFormattedDate = (daysAgo = 0) => {
+                const d = new Date();
+                d.setDate(d.getDate() - daysAgo);
+                return d.toISOString().split('T')[0];
+            };
+
+            Alpine.data('dashboard', () => ({
+                // Stany formularza
+                email: '',
+                password: '',
+                startDate: getFormattedDate(90), // Domyślnie 90 dni wstecz
+                endDate: getFormattedDate(0),    // Domyślnie do dzisiaj
+                hrRest: '',
+                hrMax: '',
+                
+                // Stany interfejsu
+                loading: false,
+                dataLoaded: false,
+                error: '',
+                debug: {},
+                
+                async fetchData() {
+                    this.loading = true;
+                    this.error = '';
+                    
+                    const formData = new FormData();
+                    formData.append('email', this.email);
+                    formData.append('password', this.password);
+                    formData.append('start_date', this.startDate);
+                    formData.append('end_date', this.endDate);
+                    
+                    if (this.hrRest) formData.append('user_hr_rest', this.hrRest);
+                    if (this.hrMax) formData.append('user_hr_max', this.hrMax);
+                    
+                    try {
+                        const response = await fetch('/api/analyze', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        if (!response.ok) {
+                            const errData = await response.json();
+                            throw new Error(errData.detail || 'Wystąpił błąd podczas pobierania danych.');
+                        }
+                        
+                        const data = await response.json();
+                        this.debug = data.debug;
+                        
+                        // Wyświetlamy div z wykresami i opóźniamy renderowanie Plotly o ułamek sekundy, 
+                        // by kontenery zdążyły przybrać właściwe wymiary
+                        this.dataLoaded = true;
+                        setTimeout(() => this.drawCharts(data), 50);
+                        
+                    } catch (e) {
+                        this.error = e.message;
+                        this.dataLoaded = false;
+                    } finally {
+                        this.loading = false;
+                        // Bezwzględnie czyścimy hasło z pamięci frontendu
+                        this.password = ''; 
+                    }
+                },
+                
+                drawCharts(data) {
+                    const layoutDefaults = { 
+                        hovermode: 'x unified',
+                        margin: { t: 40, r: 20, l: 40, b: 40 },
+                        plot_bgcolor: 'rgba(0,0,0,0)',
+                        paper_bgcolor: 'rgba(0,0,0,0)',
+                        xaxis: { showgrid: true, gridcolor: '#eee' },
+                        yaxis: { showgrid: true, gridcolor: '#eee' }
+                    };
+
+                    // 1. Wykres Endurance Score
+                    const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: 'blue', width: 2.5} };
+                    const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (Zmęczenie)', line: {color: 'red', dash: 'dot', width: 2} };
+                    Plotly.newPlot('chart-endurance', [traceCTL, traceATL], { ...layoutDefaults, title: 'Endurance Score (Rozwój formy)' });
+
+                    // 2. Wykres EF
+                    const traceEF = { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 7, opacity: 0.7} };
+                    Plotly.newPlot('chart-ef', [traceEF], { ...layoutDefaults, title: 'Współczynnik Efektywności (EF: Moc/Tętno)' });
+
+                    // 3. Wykres Mocy
+                    const tracePow = { x: data.dates, y: data.pow, mode: 'markers', name: 'Moc (W)', marker: {color: '#1f77b4', size: 7, opacity: 0.7} };
+                    Plotly.newPlot('chart-pow', [tracePow], { ...layoutDefaults, title: 'Średnia Moc Biegowa (W)' });
+
+                    // 4. Wykres Tętna
+                    const traceHR = { x: data.dates, y: data.hr, mode: 'markers', name: 'Tętno (BPM)', marker: {color: '#2ca02c', size: 7, opacity: 0.7} };
+                    Plotly.newPlot('chart-hr', [traceHR], { ...layoutDefaults, title: 'Średnie Tętno (BPM)' });
+
+                    // 5. Wykres Tempa (Odwrócona oś Y)
+                    const tracePace = { 
+                        x: data.dates, 
+                        y: data.pace, 
+                        mode: 'markers', 
+                        name: 'Tempo', 
+                        marker: {color: '#9467bd', size: 7, opacity: 0.7},
+                        text: data.pace_str, 
+                        hovertemplate: '%{x}<br>Tempo: %{text} min/km<extra></extra>' 
+                    };
+                    Plotly.newPlot('chart-pace', [tracePace], { 
+                        ...layoutDefaults, 
+                        title: 'Średnie Tempo (min/km)',
+                        yaxis: { ...layoutDefaults.yaxis, autorange: 'reversed' } 
+                    });
+                },
+                
+                reset() {
+                    // Resetowanie interfejsu do stanu początkowego
+                    this.dataLoaded = false;
+                    this.email = '';
+                    this.debug = {};
+                    
+                    // Czyszczenie pamięci przeglądarki z wykresów
+                    Plotly.purge('chart-endurance');
+                    Plotly.purge('chart-ef');
+                    Plotly.purge('chart-pow');
+                    Plotly.purge('chart-hr');
+                    Plotly.purge('chart-pace');
+                }
+            }))
+        })
+    </script>
+</body>
+</html>
