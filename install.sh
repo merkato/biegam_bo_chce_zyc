@@ -47,7 +47,7 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/venv/bin/gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind 127.0.0.1:8000
+ExecStart=$APP_DIR/venv/bin/gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind [::]]:8000
 Restart=always
 
 [Install]
