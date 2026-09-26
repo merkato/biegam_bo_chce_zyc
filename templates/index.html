@@ -213,46 +213,48 @@
                 },
                 
                 drawCharts(data) {
-                    const layoutDefaults = { 
-                        hovermode: 'x unified',
-                        margin: { t: 40, r: 20, l: 40, b: 40 },
-                        plot_bgcolor: 'rgba(0,0,0,0)',
-                        paper_bgcolor: 'rgba(0,0,0,0)',
-                        xaxis: { showgrid: true, gridcolor: '#eee' },
-                        yaxis: { showgrid: true, gridcolor: '#eee' }
+                    // Funkcja pomocnicza do budowania śladów dla trendów
+                    const addTrend = (metricKey) => {
+                        const tr = data.trends[metricKey];
+                        if (!tr || tr.hist_dates.length === 0) return [];
+                        return [
+                            { x: tr.hist_dates, y: tr.hist_vals, mode: 'lines', name: 'Trend (3 tyg.)', line: {color: '#d62728', width: 2.5}, hoverinfo: 'skip' },
+                            { x: tr.fut_dates, y: tr.fut_vals, mode: 'lines', name: 'Prognoza', line: {color: '#d62728', width: 2.5, dash: 'dot'}, hoverinfo: 'skip' }
+                        ];
                     };
 
-                    // 1. Wykres Endurance Score
-                    const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: 'blue', width: 2.5} };
+                    // 1. Endurance (oś czasu już w backendzie została przedłużona o 21 dni)
+                    const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: 'blue', width: 2} };
                     const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (Zmęczenie)', line: {color: 'red', dash: 'dot', width: 2} };
-                    Plotly.newPlot('chart-endurance', [traceCTL, traceATL], { ...layoutDefaults, title: 'Endurance Score (Rozwój formy)' });
-
-                    // 2. Wykres EF
-                    const traceEF = { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 7, opacity: 0.7} };
-                    Plotly.newPlot('chart-ef', [traceEF], { ...layoutDefaults, title: 'Współczynnik Efektywności (EF: Moc/Tętno)' });
-
-                    // 3. Wykres Mocy
-                    const tracePow = { x: data.dates, y: data.pow, mode: 'markers', name: 'Moc (W)', marker: {color: '#1f77b4', size: 7, opacity: 0.7} };
-                    Plotly.newPlot('chart-pow', [tracePow], { ...layoutDefaults, title: 'Średnia Moc Biegowa (W)' });
-
-                    // 4. Wykres Tętna
-                    const traceHR = { x: data.dates, y: data.hr, mode: 'markers', name: 'Tętno (BPM)', marker: {color: '#2ca02c', size: 7, opacity: 0.7} };
-                    Plotly.newPlot('chart-hr', [traceHR], { ...layoutDefaults, title: 'Średnie Tętno (BPM)' });
-
-                    // 5. Wykres Tempa (Odwrócona oś Y)
-                    const tracePace = { 
-                        x: data.dates, 
-                        y: data.pace, 
-                        mode: 'markers', 
-                        name: 'Tempo', 
-                        marker: {color: '#9467bd', size: 7, opacity: 0.7},
-                        text: data.pace_str, 
-                        hovertemplate: '%{x}<br>Tempo: %{text} min/km<extra></extra>' 
+                    
+                    // Linię dzisiejszego dnia musimy narysować ręcznie (na bazie JavaScript Date)
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const layoutEndurance = { 
+                        title: 'Endurance Score (TRIMP)', hovermode: 'x unified',
+                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }]
                     };
-                    Plotly.newPlot('chart-pace', [tracePace], { 
-                        ...layoutDefaults, 
+                    Plotly.newPlot('chart-endurance', [traceCTL, traceATL], layoutEndurance);
+
+                    // 2. EF
+                    const traceEF = { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 8} };
+                    Plotly.newPlot('chart-ef', [traceEF, ...addTrend('ef')], { title: 'Współczynnik Efektywności (EF)' });
+
+                    // 3. Moc
+                    const tracePow = { x: data.dates, y: data.pow, mode: 'markers', name: 'Moc (W)', marker: {color: '#1f77b4', size: 8} };
+                    Plotly.newPlot('chart-pow', [tracePow, ...addTrend('pow')], { title: 'Średnia Moc (W)' });
+
+                    // 4. Tętno
+                    const traceHR = { x: data.dates, y: data.hr, mode: 'markers', name: 'Tętno (BPM)', marker: {color: '#2ca02c', size: 8} };
+                    Plotly.newPlot('chart-hr', [traceHR, ...addTrend('hr')], { title: 'Średnie Tętno (BPM)' });
+
+                    // 5. Tempo
+                    const tracePace = { 
+                        x: data.dates, y: data.pace, mode: 'markers', name: 'Tempo', marker: {color: '#9467bd', size: 8},
+                        text: data.pace_str, hovertemplate: '%{x}<br>Tempo: %{text} min/km<extra></extra>' 
+                    };
+                    Plotly.newPlot('chart-pace', [tracePace, ...addTrend('pace')], { 
                         title: 'Średnie Tempo (min/km)',
-                        yaxis: { ...layoutDefaults.yaxis, autorange: 'reversed' } 
+                        yaxis: { autorange: 'reversed' } // Szybsze tempo wyżej
                     });
                 },
                 
