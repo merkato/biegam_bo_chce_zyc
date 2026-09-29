@@ -26,21 +26,13 @@
             </p>
             <form @submit.prevent="fetchData">
                 <div class="grid-2">
-                    <div>
-                        <label>Email Garmin Connect</label>
-                        <input type="email" x-model="email" placeholder="Email" required>
-                    </div>
-                    <div>
-                        <label>Hasło</label>
-                        <input type="password" x-model="password" placeholder="Hasło" required>
-                    </div>
+                    <div><label>Email Garmin Connect</label><input type="email" x-model="email" placeholder="Email" required></div>
+                    <div><label>Hasło</label><input type="password" x-model="password" placeholder="Hasło" required></div>
                 </div>
-                
                 <div class="grid-2" style="margin-top: 15px;">
                     <div><label>Od kiedy analizować?</label><input type="date" x-model="startDate" required></div>
                     <div><label>Do kiedy analizować?</label><input type="date" x-model="endDate" required></div>
                 </div>
-
                 <div class="grid-2" style="margin-top: 15px;">
                     <div><label>Tętno spoczynkowe (zostaw puste dla Auto):</label><input type="number" x-model="hrRest" placeholder="Wykryj automatycznie"></div>
                     <div><label>Tętno maksymalne (zostaw puste dla Auto):</label><input type="number" x-model="hrMax" placeholder="Wykryj automatycznie"></div>
@@ -52,7 +44,7 @@
 
         <div class="card" x-show="loading" style="text-align: center;">
             <p>🔄 Logowanie i analiza aktywności z Garmin Connect...</p>
-            <p style="font-size: 0.85em; color: #666;">Pobieranie wskaźników HRV może zająć do kilkunastu sekund. Proszę czekać.</p>
+            <p style="font-size: 0.85em; color: #666;">Pobieranie wskaźników HRV oraz Strumieni Mocy może zająć do kilkunastu sekund. Proszę czekać.</p>
         </div>
         
         <div x-show="dataLoaded">
@@ -66,6 +58,7 @@
             <!-- Kontenery -->
             <div class="card"><div id="chart-heatmap" style="height:260px;"></div></div>
             <div class="card"><div id="chart-endurance" style="height:400px;"></div></div>
+            <div class="card"><div id="chart-mmp" style="height:350px;"></div></div>
             <div class="card"><div id="chart-ef" style="height:400px;"></div></div>
             <div class="card"><div id="chart-pow" style="height:400px;"></div></div>
             <div class="card"><div id="chart-hr" style="height:400px;"></div></div>
@@ -77,7 +70,7 @@
         document.addEventListener('alpine:init', () => {
             const today = new Date();
             const pastDate = new Date();
-            pastDate.setDate(today.getDate() - 90); // Domyślnie ostatnie 3 miesiące
+            pastDate.setDate(today.getDate() - 90);
             const formatDate = (date) => date.toISOString().split('T')[0];
 
             Alpine.data('dashboard', () => ({
@@ -94,28 +87,23 @@
                     
                     try {
                         const response = await fetch('/api/analyze', { method: 'POST', body: formData });
-                        
                         if (!response.ok) {
-                            // Naprawiony system łapania błędu (chroni przed HTMLowym 502 Bad Gateway)
                             const contentType = response.headers.get("content-type");
                             if (contentType && contentType.indexOf("application/json") !== -1) {
                                 const errData = await response.json();
                                 throw new Error(errData.detail || 'Wystąpił błąd podczas analizy.');
                             } else {
-                                throw new Error(`Błąd mikrusa/serwera (HTTP ${response.status}). Skrypt Python rzucił wyjątek, lub API Garmina odpowiada zbyt wolno. Zobacz journalctl -u garmin.`);
+                                throw new Error(`Błąd mikrusa/serwera (HTTP ${response.status}). Skrypt rzucił wyjątek. Zobacz logi journalctl.`);
                             }
                         }
-                        
                         const data = await response.json();
                         this.debug = data.debug;
                         this.drawCharts(data);
                         this.dataLoaded = true;
-                        
                     } catch (e) {
                         this.error = e.message;
                     } finally {
-                        this.loading = false;
-                        this.password = ''; 
+                        this.loading = false; this.password = ''; 
                     }
                 },
                 
@@ -129,7 +117,6 @@
                         ];
                     };
 
-                    // 0. MAPA CIEPLNA
                     const traceHeatmap = {
                         z: data.hm_z, x: data.hm_x, y: data.hm_y, type: 'heatmap',
                         colorscale: [ [0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966'] ],
@@ -137,12 +124,10 @@
                         hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
                     };
                     Plotly.newPlot('chart-heatmap', [traceHeatmap], { 
-                        title: 'Mapa Konsekwencji Obciążeń (TRIMP)',
-                        yaxis: { autorange: 'reversed', fixedrange: true },
+                        title: 'Mapa Konsekwencji Obciążeń (TRIMP)', yaxis: { autorange: 'reversed', fixedrange: true },
                         xaxis: { fixedrange: true, tickangle: -45 }, margin: { t: 40, b: 60, l: 40, r: 20 }, plot_bgcolor: 'white'
                     });
 
-                    // 1. Endurance
                     const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: 'blue', width: 2} };
                     const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (Zmęczenie)', line: {color: 'red', dash: 'dot', width: 2} };
                     const todayStr = new Date().toISOString().split('T')[0];
@@ -151,15 +136,29 @@
                         shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }]
                     });
 
-                    // 2. EF + HRV
+                    // NOWY WYKRES: MMP (Krzywa Mocy)
+                    const traceMMP = {
+                        x: data.mmp_labels,
+                        y: data.mmp_vals,
+                        mode: 'lines+markers',
+                        name: 'Max Power',
+                        line: {color: '#d62728', width: 3, shape: 'spline'},
+                        marker: {size: 10, color: '#1f77b4'},
+                        hovertemplate: 'Czas: %{x}<br>Max Moc: %{y} W<extra></extra>'
+                    };
+                    Plotly.newPlot('chart-mmp', [traceMMP], {
+                        title: 'Krzywa Mocy MMP (Top 5 najcięższych treningów)',
+                        yaxis: { title: 'Moc (W)' }, xaxis: { title: 'Czas trwania' },
+                        margin: { t: 40, b: 40, l: 40, r: 20 }
+                    });
+
                     const validHrv = [];
                     data.dates.forEach((d, i) => {
                         if (data.hrv_upper[i] !== null && data.hrv_lower[i] !== null) validHrv.push({date: d, upper: data.hrv_upper[i], lower: data.hrv_lower[i]});
                     });
                     const bandX = validHrv.map(item => item.date);
                     const traceHrvBand = {
-                        x: bandX.concat(bandX.slice().reverse()),
-                        y: validHrv.map(i => i.upper).concat(validHrv.map(i => i.lower).reverse()),
+                        x: bandX.concat(bandX.slice().reverse()), y: validHrv.map(i => i.upper).concat(validHrv.map(i => i.lower).reverse()),
                         fill: 'toself', fillcolor: 'rgba(44, 160, 44, 0.15)', line: {color: 'transparent'},
                         name: 'Norma HRV (30 dni)', yaxis: 'y2', type: 'scatter', hoverinfo: 'skip'
                     };
@@ -172,15 +171,12 @@
                         yaxis2: { title: 'Zmienność Tętna (ms)', titlefont: {color: '#2ca02c'}, overlaying: 'y', side: 'right' }, hovermode: 'x unified'
                     });
 
-                    // 3. Moc
                     const tracePow = { x: data.dates, y: data.pow, mode: 'markers', name: 'Moc (W)', marker: {color: '#1f77b4', size: 8} };
                     Plotly.newPlot('chart-pow', [tracePow, ...addTrend('pow')], { title: 'Średnia Moc (W)' });
 
-                    // 4. Tętno
                     const traceHR = { x: data.dates, y: data.hr, mode: 'markers', name: 'Tętno (BPM)', marker: {color: '#2ca02c', size: 8} };
                     Plotly.newPlot('chart-hr', [traceHR, ...addTrend('hr')], { title: 'Średnie Tętno (BPM)' });
 
-                    // 5. Tempo
                     const tracePace = { 
                         x: data.dates, y: data.pace, mode: 'markers', name: 'Tempo', marker: {color: '#9467bd', size: 8},
                         text: data.pace_str, hovertemplate: '%{x}<br>Tempo: %{text} min/km<extra></extra>' 
@@ -192,7 +188,7 @@
                 
                 reset() {
                     this.dataLoaded = false;
-                    ['chart-heatmap', 'chart-endurance', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => Plotly.purge(id));
+                    ['chart-heatmap', 'chart-endurance', 'chart-mmp', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => Plotly.purge(id));
                 }
             }))
         })

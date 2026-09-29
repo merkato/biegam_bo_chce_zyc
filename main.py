@@ -106,6 +106,43 @@ async def analyze_garmin(
 
         run_df['EF'] = run_df[pow_col] / run_df[hr_col] if pow_col and hr_col else np.nan
         run_df['trimp'] = run_df.apply(lambda row: calculate_trimp(row.get(hr_col), row.get(dur_col), hr_rest, hr_max), axis=1)
+
+        # --- MODUŁ MMP (Krzywa Mocy) ---
+        mmp_windows = [10, 30, 60, 300, 1200, 3600]
+        mmp_labels = ['10s', '30s', '1 min', '5 min', '20 min', '1 godz.']
+        max_powers = {w: 0 for w in mmp_windows}
+        
+        if not run_df.empty and 'trimp' in run_df.columns:
+            # Sortujemy i bierzemy top 5 najcięższych treningów w wybranym okresie
+            top_runs = run_df.nlargest(5, 'trimp')
+            for _, row in top_runs.iterrows():
+                try:
+                    act_id = row.get('activityId')
+                    if act_id:
+                        details = client.get_activity_details(act_id)
+                        p_idx = next((i.get('metricsIndex') for i in details.get('metricDescriptors', []) if i.get('key') in ['directPower', 'power']), None)
+                        if p_idx is not None:
+                            power_data = []
+                            for m in details.get('activityDetailMetrics', []):
+                                vals = m.get('metrics', [])
+                                if len(vals) > p_idx and vals[p_idx] is not None:
+                                    power_data.append(vals[p_idx])
+                                else:
+                                    power_data.append(0)
+                            
+                            # Algorytm rosnących okien czasowych (Rolling Mean)
+                            if power_data:
+                                s = pd.Series(power_data)
+                                for w in mmp_windows:
+                                    if len(s) >= w:
+                                        w_max = s.rolling(w).mean().max()
+                                        if w_max > max_powers[w]: max_powers[w] = w_max
+                except:
+                    pass
+                time.sleep(0.05) # Mikrosekundowy oddech dla Garmina by nie zarobić bana
+                
+        mmp_vals = [round(max_powers[w], 1) if not pd.isna(max_powers[w]) else 0 for w in mmp_windows]
+        # -----------------------------------
         
         agg_dict = {'pace_decimal': 'mean', 'trimp': 'sum'}
         if pow_col: agg_dict[pow_col] = 'mean'
@@ -116,12 +153,9 @@ async def analyze_garmin(
         daily['date'] = pd.to_datetime(daily['startTimeLocal']).dt.normalize()
         daily['pace_str'] = daily['pace_decimal'].apply(format_pace)
 
-        # --- MODUŁ HRV ---
         hrv_records = []
         hrv_start_date = pd.to_datetime(start_date) - pd.Timedelta(days=30)
         hrv_dates = pd.date_range(start=hrv_start_date, end=end_date)
-        
-        # Ochrona przed Timeoutem - blokada na max 60 dni dla nocnego tętna (30 dni bufora + 30 wyliczeń)
         if len(hrv_dates) > 60:
             hrv_dates = pd.date_range(start=pd.to_datetime(end_date)-pd.Timedelta(days=60), end=end_date)
             
@@ -138,20 +172,16 @@ async def analyze_garmin(
             hrv_df = pd.DataFrame(hrv_records)
             hrv_df['date'] = pd.to_datetime(hrv_df['date'])
             hrv_df = hrv_df.set_index('date').reindex(hrv_dates)
-            
             hrv_df['hrv'] = pd.to_numeric(hrv_df['hrv'], errors='coerce').interpolate(method='time')
             hrv_df['hrv_7d'] = hrv_df['hrv'].ewm(span=7, adjust=False).mean()
-            
             hrv_df['hrv_30d_avg'] = hrv_df['hrv'].rolling(window=30, min_periods=1).mean()
             hrv_df['hrv_30d_std'] = hrv_df['hrv'].rolling(window=30, min_periods=1).std().fillna(0)
-            
             hrv_df['hrv_upper'] = hrv_df['hrv_30d_avg'] + hrv_df['hrv_30d_std']
             hrv_df['hrv_lower'] = hrv_df['hrv_30d_avg'] - hrv_df['hrv_30d_std']
             hrv_df = hrv_df.reset_index().rename(columns={'index': 'date'})
         else:
             hrv_df = pd.DataFrame(columns=['date', 'hrv', 'hrv_7d', 'hrv_upper', 'hrv_lower'])
 
-        # --- MODELE I ZŁĄCZENIA ---
         min_d, max_d = daily['date'].min(), daily['date'].max()
         forecast_end = max(pd.Timestamp.today().normalize(), max_d) + pd.Timedelta(days=21)
         full_dates = pd.date_range(start=min_d, end=forecast_end)
@@ -162,7 +192,6 @@ async def analyze_garmin(
         daily_trimp['CTL'] = daily_trimp['trimp'].ewm(span=42, adjust=False).mean()
         daily_trimp['ATL'] = daily_trimp['trimp'].ewm(span=7, adjust=False).mean()
 
-        # FIX: Usunięcie 'trimp' z 'daily' by uniknąć duplikatów trimp_x i trimp_y!
         daily_for_merge = daily.drop(columns=['trimp'])
         final_df = pd.merge(daily_trimp, daily_for_merge, on='date', how='left')
         final_df = pd.merge(final_df, hrv_df, on='date', how='left')
@@ -171,23 +200,18 @@ async def analyze_garmin(
             if col not in final_df.columns: final_df[col] = None
         final_df = final_df.replace({np.nan: None})
 
-        # --- MODUŁ MAPY CIEPLNEJ (TRIMP) ---
         today_ts = pd.Timestamp.today().normalize()
         hist_df = final_df[final_df['date'] <= today_ts].copy()
-        
         hist_df['week_start'] = hist_df['date'] - pd.to_timedelta(hist_df['date'].dt.dayofweek, unit='d')
         hist_df['dow'] = hist_df['date'].dt.dayofweek
-        
         if not hist_df.empty:
             min_week = hist_df['week_start'].min()
             max_week = hist_df['week_start'].max()
             weeks = pd.date_range(start=min_week, end=max_week, freq='7D')
-            
             hm = hist_df.pivot(index='dow', columns='week_start', values='trimp').reindex(index=range(7), columns=weeks).fillna(0)
             heatmap_z = hm.values.tolist()
             heatmap_x = hm.columns.strftime('%Y-%m-%d').tolist()
-        else:
-            heatmap_z, heatmap_x = [], []
+        else: heatmap_z, heatmap_x = [], []
             
         heatmap_y = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz']
 
@@ -213,7 +237,9 @@ async def analyze_garmin(
             "trends": trends,
             "hm_z": heatmap_z,
             "hm_x": heatmap_x,
-            "hm_y": heatmap_y
+            "hm_y": heatmap_y,
+            "mmp_labels": mmp_labels,
+            "mmp_vals": mmp_vals
         }
         
     except Exception as e:
