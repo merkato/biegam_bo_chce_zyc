@@ -235,9 +235,55 @@
                     };
                     Plotly.newPlot('chart-endurance', [traceCTL, traceATL], layoutEndurance);
 
-                    // 2. EF
-                    const traceEF = { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 8} };
-                    Plotly.newPlot('chart-ef', [traceEF, ...addTrend('ef')], { title: 'Współczynnik Efektywności (EF)' });
+                    // 2. EF połączone z HRV (Dual Axis)
+                    const validHrv = [];
+                    data.dates.forEach((d, i) => {
+                        if (data.hrv_upper[i] !== null && data.hrv_lower[i] !== null) {
+                            validHrv.push({date: d, upper: data.hrv_upper[i], lower: data.hrv_lower[i]});
+                        }
+                    });
+                    
+                    const bandX = validHrv.map(item => item.date);
+                    const bandUpper = validHrv.map(item => item.upper);
+                    const bandLower = validHrv.map(item => item.lower);
+
+                    const traceHrvBand = {
+                        x: bandX.concat(bandX.slice().reverse()),
+                        y: bandUpper.concat(bandLower.slice().reverse()),
+                        fill: 'toself',
+                        fillcolor: 'rgba(44, 160, 44, 0.15)', // Delikatna zieleń dla pasma normy
+                        line: {color: 'transparent'},
+                        name: 'Norma HRV (±1σ z 30 dni)',
+                        yaxis: 'y2',
+                        type: 'scatter',
+                        hoverinfo: 'skip'
+                    };
+
+                    const traceHrv7d = {
+                        x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (Trend 7d)',
+                        line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2'
+                    };
+                    
+                    const traceHrvDaily = {
+                        x: data.dates, y: data.hrv, mode: 'markers', name: 'HRV Nocne',
+                        marker: {color: '#2ca02c', size: 4, opacity: 0.4}, yaxis: 'y2'
+                    };
+
+                    const traceEF = { 
+                        x: data.dates, y: data.ef, mode: 'markers', name: 'EF', 
+                        marker: {color: '#ff7f0e', size: 8} 
+                    };
+                    
+                    // Ustawienie układu dwóch osi Y dla tego modułu
+                    const layoutEF_HRV = { 
+                        title: 'Współczynnik Efektywności (EF) vs Osobista Norma HRV',
+                        yaxis: { title: 'EF (Moc / Tętno)', titlefont: {color: '#ff7f0e'}, tickfont: {color: '#ff7f0e'} },
+                        yaxis2: { title: 'Zmienność Tętna (ms)', titlefont: {color: '#2ca02c'}, tickfont: {color: '#2ca02c'}, overlaying: 'y', side: 'right' },
+                        hovermode: 'x unified'
+                    };
+
+                    // Rysujemy EF, tren 21-dniowy EF (z funkcji addTrend), dziennie HRV, Trend HRV i Pasmo
+                    Plotly.newPlot('chart-ef', [traceHrvBand, traceHrv7d, traceHrvDaily, traceEF, ...addTrend('ef')], layoutEF_HRV);
 
                     // 3. Moc
                     const tracePow = { x: data.dates, y: data.pow, mode: 'markers', name: 'Moc (W)', marker: {color: '#1f77b4', size: 8} };
