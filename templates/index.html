@@ -136,6 +136,7 @@
             </div>
 
             <!-- Kontenery na wykresy Plotly -->
+            <div class="card"><div id="chart-heatmap" style="height:260px;"></div></div>
             <div class="card"><div id="chart-endurance" class="chart-container"></div></div>
             <div class="card"><div id="chart-ef" class="chart-container"></div></div>
             <div class="card"><div id="chart-pow" class="chart-container"></div></div>
@@ -222,7 +223,35 @@
                             { x: tr.fut_dates, y: tr.fut_vals, mode: 'lines', name: 'Prognoza', line: {color: '#d62728', width: 2.5, dash: 'dot'}, hoverinfo: 'skip' }
                         ];
                     };
-
+                    // --- 0. MAPA CIEPLNA KONSEKWENCJI (TRIMP) ---
+                    const traceHeatmap = {
+                        z: data.hm_z,
+                        x: data.hm_x,
+                        y: data.hm_y,
+                        type: 'heatmap',
+                        // Paleta barw TRIMP (od szarego zera, przez jasny błękit, do głębokiego granatu przy morderczych treningach)
+                        colorscale: [
+                            [0, '#ebedf0'],       // 0 - Brak treningu
+                            [0.01, '#cce5ff'],    // Lekki trucht / Regeneracja
+                            [0.4, '#66b2ff'],     // Średnie wybieganie
+                            [0.7, '#0066cc'],     // Mocny akcent
+                            [1.0, '#002966']      // Zawody / "Odcięcie prądu"
+                        ],
+                        hoverongaps: false,
+                        xgap: 3, // Odstęp poziomy między kafelkami (GitHub style)
+                        ygap: 3, // Odstęp pionowy
+                        showscale: false, // Ukrywamy pasek boczny dla czystości
+                        hovertemplate: 'Tydzień od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
+                    };
+                    
+                    const layoutHeatmap = { 
+                        title: 'Mapa Konsekwencji Obciążeń (TRIMP)',
+                        yaxis: { autorange: 'reversed', fixedrange: true }, // Poniedziałek na górze!
+                        xaxis: { fixedrange: true, tickangle: -45, title: 'Tygodnie' },
+                        margin: { t: 40, b: 60, l: 40, r: 20 },
+                        plot_bgcolor: 'white'
+                    };
+                    Plotly.newPlot('chart-heatmap', [traceHeatmap], layoutHeatmap);
                     // 1. Endurance (oś czasu już w backendzie została przedłużona o 21 dni)
                     const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: 'blue', width: 2} };
                     const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (Zmęczenie)', line: {color: 'red', dash: 'dot', width: 2} };
