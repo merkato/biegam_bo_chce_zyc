@@ -2,317 +2,175 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Garmin Trends Analyzer</title>
-    <!-- Biblioteki ładowane z CDN dla oszczędności transferu na mikr.us -->
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            background: #f4f4f9; 
-            max-width: 900px; 
-            margin: 0 auto; 
-            padding: 20px; 
-            color: #333;
-        }
-        h1 { text-align: center; color: #2c3e50; }
-        .card { 
-            background: white; 
-            padding: 20px; 
-            border-radius: 12px; 
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
-            margin-bottom: 25px; 
-        }
-        .grid-2 { 
-            display: grid; 
-            grid-template-columns: 1fr 1fr; 
-            gap: 15px; 
-        }
-        @media (max-width: 600px) {
-            .grid-2 { grid-template-columns: 1fr; gap: 10px; }
-        }
-        label { font-size: 0.9em; color: #666; font-weight: bold; display: block; margin-bottom: 5px; }
-        input { 
-            padding: 10px; 
-            width: 100%; 
-            box-sizing: border-box; 
-            border: 1px solid #ccc; 
-            border-radius: 6px; 
-        }
-        input:focus { outline: none; border-color: #1f77b4; }
-        button { 
-            background: #1f77b4; 
-            color: white; 
-            border: none; 
-            cursor: pointer; 
-            font-weight: bold; 
-            padding: 12px; 
-            width: 100%; 
-            border-radius: 6px;
-            margin-top: 20px;
-            transition: background 0.3s;
-        }
-        button:hover { background: #155a8a; }
-        .btn-danger { background: #d62728; margin-top: 10px; }
-        .btn-danger:hover { background: #a81c1d; }
-        .info-box {
-            background: #e6f2ff; 
-            border-left: 4px solid #1f77b4; 
-            padding: 15px;
-            border-radius: 4px;
-        }
-        .chart-container { height: 400px; width: 100%; }
+        body { font-family: sans-serif; background: #f4f4f9; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        input, button { padding: 10px; width: 100%; box-sizing: border-box; margin-top: 5px; }
+        button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px;}
+        label { font-size: 0.9em; color: #555; }
     </style>
 </head>
 <body>
 
     <div x-data="dashboard()">
-        <h1>Analizator Formy Biegowej</h1>
+        <h1 style="text-align: center; color: #2c3e50;">Analizator Formy Biegowej</h1>
         
-        <!-- Sekcja Formularza (Widoczna przed pobraniem danych) -->
         <div class="card" x-show="!dataLoaded && !loading">
-            <p style="text-align: center; color: #555; margin-bottom: 20px;">
-                Zaloguj się do Garmin Connect, aby wygenerować analizę. <br>
+            <p style="text-align: center; color: #666; font-size: 0.95em;">
+                Zaloguj się do Garmin Connect, aby wygenerować analizę.<br>
                 <small>(Twoje hasło jest przetwarzane tylko w pamięci RAM i nigdy nie jest zapisywane na dysku serwera).</small>
             </p>
-            
             <form @submit.prevent="fetchData">
                 <div class="grid-2">
                     <div>
                         <label>Email Garmin Connect</label>
-                        <input type="email" x-model="email" placeholder="Wpisz adres e-mail" required>
+                        <input type="email" x-model="email" placeholder="Email" required>
                     </div>
                     <div>
                         <label>Hasło</label>
-                        <input type="password" x-model="password" placeholder="Wpisz hasło" required>
+                        <input type="password" x-model="password" placeholder="Hasło" required>
                     </div>
                 </div>
                 
                 <div class="grid-2" style="margin-top: 15px;">
-                    <div>
-                        <label>Od kiedy analizować?</label>
-                        <input type="date" x-model="startDate" required>
-                    </div>
-                    <div>
-                        <label>Do kiedy analizować?</label>
-                        <input type="date" x-model="endDate" required>
-                    </div>
+                    <div><label>Od kiedy analizować?</label><input type="date" x-model="startDate" required></div>
+                    <div><label>Do kiedy analizować?</label><input type="date" x-model="endDate" required></div>
                 </div>
 
                 <div class="grid-2" style="margin-top: 15px;">
-                    <div>
-                        <label>Tętno spoczynkowe (zostaw puste dla Auto):</label>
-                        <input type="number" x-model="hrRest" placeholder="Wykryj automatycznie">
-                    </div>
-                    <div>
-                        <label>Tętno maksymalne (zostaw puste dla Auto):</label>
-                        <input type="number" x-model="hrMax" placeholder="Wykryj automatycznie">
-                    </div>
+                    <div><label>Tętno spoczynkowe (zostaw puste dla Auto):</label><input type="number" x-model="hrRest" placeholder="Wykryj automatycznie"></div>
+                    <div><label>Tętno maksymalne (zostaw puste dla Auto):</label><input type="number" x-model="hrMax" placeholder="Wykryj automatycznie"></div>
                 </div>
-
                 <button type="submit">Generuj Dashboard</button>
             </form>
-            
-            <div x-show="error" style="color: #d62728; background: #ffe6e6; padding: 10px; border-radius: 6px; margin-top: 15px; text-align: center;" x-text="error"></div>
+            <div x-show="error" style="background: #fee; color: #c00; padding: 10px; border-radius: 4px; margin-top: 15px;" x-text="error"></div>
         </div>
 
-        <!-- Ekran Ładowania -->
-        <div class="card" x-show="loading" style="text-align: center; padding: 40px 20px;">
-            <h3>🔄 Łączenie z API Garmina...</h3>
-            <p style="color: #666;">Pobieranie aktywności, przeliczanie punktów TRIMP i budowanie modeli.<br>To może potrwać kilkanaście sekund, proszę czekać.</p>
+        <div class="card" x-show="loading" style="text-align: center;">
+            <p>🔄 Logowanie i analiza aktywności z Garmin Connect...</p>
+            <p style="font-size: 0.85em; color: #666;">Pobieranie wskaźników HRV może zająć do kilkunastu sekund. Proszę czekać.</p>
         </div>
         
-        <!-- Sekcja Wyników i Wykresów -->
-        <div x-show="dataLoaded" style="display: none;">
-            
-            <!-- Panel Informacyjny -->
-            <div class="card info-box">
-                <p style="margin: 0; font-size: 0.95em;">
-                    <strong>Fizjologia przyjęta do obliczeń TRIMP:</strong><br>
-                    Tętno spoczynkowe: <span x-text="debug.hr_rest"></span> BPM | 
-                    Tętno maksymalne: <span x-text="debug.hr_max"></span> BPM
+        <div x-show="dataLoaded">
+            <div class="card" style="background: #e6f2ff; border-left: 4px solid #1f77b4; padding: 12px;">
+                <p style="margin: 0; font-size: 0.9em; display: flex; justify-content: space-between;">
+                    <span><strong>Fizjologia TRIMP:</strong> Spoczynkowe: <span x-text="debug.hr_rest"></span> BPM | Maksymalne: <span x-text="debug.hr_max"></span> BPM</span>
+                    <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold;">[ Wyloguj / Zamknij widok ]</a>
                 </p>
             </div>
 
-            <!-- Kontenery na wykresy Plotly -->
+            <!-- Kontenery -->
             <div class="card"><div id="chart-heatmap" style="height:260px;"></div></div>
-            <div class="card"><div id="chart-endurance" class="chart-container"></div></div>
-            <div class="card"><div id="chart-ef" class="chart-container"></div></div>
-            <div class="card"><div id="chart-pow" class="chart-container"></div></div>
-            <div class="card"><div id="chart-hr" class="chart-container"></div></div>
-            <div class="card"><div id="chart-pace" class="chart-container"></div></div>
-            
-            <button @click="reset()" class="btn-danger">Zakończ analizę (Wyczyść widok i wyloguj)</button>
+            <div class="card"><div id="chart-endurance" style="height:400px;"></div></div>
+            <div class="card"><div id="chart-ef" style="height:400px;"></div></div>
+            <div class="card"><div id="chart-pow" style="height:400px;"></div></div>
+            <div class="card"><div id="chart-hr" style="height:400px;"></div></div>
+            <div class="card"><div id="chart-pace" style="height:400px;"></div></div>
         </div>
     </div>
 
     <script>
         document.addEventListener('alpine:init', () => {
-            // Funkcja pomocnicza do ustawiania domyślnych dat
-            const getFormattedDate = (daysAgo = 0) => {
-                const d = new Date();
-                d.setDate(d.getDate() - daysAgo);
-                return d.toISOString().split('T')[0];
-            };
+            const today = new Date();
+            const pastDate = new Date();
+            pastDate.setDate(today.getDate() - 90); // Domyślnie ostatnie 3 miesiące
+            const formatDate = (date) => date.toISOString().split('T')[0];
 
             Alpine.data('dashboard', () => ({
-                // Stany formularza
-                email: '',
-                password: '',
-                startDate: getFormattedDate(90), // Domyślnie 90 dni wstecz
-                endDate: getFormattedDate(0),    // Domyślnie do dzisiaj
-                hrRest: '',
-                hrMax: '',
-                
-                // Stany interfejsu
-                loading: false,
-                dataLoaded: false,
-                error: '',
-                debug: {},
+                email: '', password: '', startDate: formatDate(pastDate), endDate: formatDate(today),
+                hrRest: '', hrMax: '', loading: false, dataLoaded: false, error: '', debug: {},
                 
                 async fetchData() {
-                    this.loading = true;
-                    this.error = '';
-                    
+                    this.loading = true; this.error = '';
                     const formData = new FormData();
-                    formData.append('email', this.email);
-                    formData.append('password', this.password);
-                    formData.append('start_date', this.startDate);
-                    formData.append('end_date', this.endDate);
-                    
+                    formData.append('email', this.email); formData.append('password', this.password);
+                    formData.append('start_date', this.startDate); formData.append('end_date', this.endDate);
                     if (this.hrRest) formData.append('user_hr_rest', this.hrRest);
                     if (this.hrMax) formData.append('user_hr_max', this.hrMax);
                     
                     try {
-                        const response = await fetch('/api/analyze', {
-                            method: 'POST',
-                            body: formData
-                        });
+                        const response = await fetch('/api/analyze', { method: 'POST', body: formData });
                         
                         if (!response.ok) {
-                            const errData = await response.json();
-                            throw new Error(errData.detail || 'Wystąpił błąd podczas pobierania danych.');
+                            // Naprawiony system łapania błędu (chroni przed HTMLowym 502 Bad Gateway)
+                            const contentType = response.headers.get("content-type");
+                            if (contentType && contentType.indexOf("application/json") !== -1) {
+                                const errData = await response.json();
+                                throw new Error(errData.detail || 'Wystąpił błąd podczas analizy.');
+                            } else {
+                                throw new Error(`Błąd mikrusa/serwera (HTTP ${response.status}). Skrypt Python rzucił wyjątek, lub API Garmina odpowiada zbyt wolno. Zobacz journalctl -u garmin.`);
+                            }
                         }
                         
                         const data = await response.json();
                         this.debug = data.debug;
-                        
-                        // Wyświetlamy div z wykresami i opóźniamy renderowanie Plotly o ułamek sekundy, 
-                        // by kontenery zdążyły przybrać właściwe wymiary
+                        this.drawCharts(data);
                         this.dataLoaded = true;
-                        setTimeout(() => this.drawCharts(data), 50);
                         
                     } catch (e) {
                         this.error = e.message;
-                        this.dataLoaded = false;
                     } finally {
                         this.loading = false;
-                        // Bezwzględnie czyścimy hasło z pamięci frontendu
                         this.password = ''; 
                     }
                 },
                 
                 drawCharts(data) {
-                    // Funkcja pomocnicza do budowania śladów dla trendów
                     const addTrend = (metricKey) => {
                         const tr = data.trends[metricKey];
                         if (!tr || tr.hist_dates.length === 0) return [];
                         return [
-                            { x: tr.hist_dates, y: tr.hist_vals, mode: 'lines', name: 'Trend (3 tyg.)', line: {color: '#d62728', width: 2.5}, hoverinfo: 'skip' },
+                            { x: tr.hist_dates, y: tr.hist_vals, mode: 'lines', name: 'Trend', line: {color: '#d62728', width: 2.5}, hoverinfo: 'skip' },
                             { x: tr.fut_dates, y: tr.fut_vals, mode: 'lines', name: 'Prognoza', line: {color: '#d62728', width: 2.5, dash: 'dot'}, hoverinfo: 'skip' }
                         ];
                     };
-                    // --- 0. MAPA CIEPLNA KONSEKWENCJI (TRIMP) ---
+
+                    // 0. MAPA CIEPLNA
                     const traceHeatmap = {
-                        z: data.hm_z,
-                        x: data.hm_x,
-                        y: data.hm_y,
-                        type: 'heatmap',
-                        // Paleta barw TRIMP (od szarego zera, przez jasny błękit, do głębokiego granatu przy morderczych treningach)
-                        colorscale: [
-                            [0, '#ebedf0'],       // 0 - Brak treningu
-                            [0.01, '#cce5ff'],    // Lekki trucht / Regeneracja
-                            [0.4, '#66b2ff'],     // Średnie wybieganie
-                            [0.7, '#0066cc'],     // Mocny akcent
-                            [1.0, '#002966']      // Zawody / "Odcięcie prądu"
-                        ],
-                        hoverongaps: false,
-                        xgap: 3, // Odstęp poziomy między kafelkami (GitHub style)
-                        ygap: 3, // Odstęp pionowy
-                        showscale: false, // Ukrywamy pasek boczny dla czystości
-                        hovertemplate: 'Tydzień od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
+                        z: data.hm_z, x: data.hm_x, y: data.hm_y, type: 'heatmap',
+                        colorscale: [ [0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966'] ],
+                        hoverongaps: false, xgap: 3, ygap: 3, showscale: false,
+                        hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
                     };
-                    
-                    const layoutHeatmap = { 
+                    Plotly.newPlot('chart-heatmap', [traceHeatmap], { 
                         title: 'Mapa Konsekwencji Obciążeń (TRIMP)',
-                        yaxis: { autorange: 'reversed', fixedrange: true }, // Poniedziałek na górze!
-                        xaxis: { fixedrange: true, tickangle: -45, title: 'Tygodnie' },
-                        margin: { t: 40, b: 60, l: 40, r: 20 },
-                        plot_bgcolor: 'white'
-                    };
-                    Plotly.newPlot('chart-heatmap', [traceHeatmap], layoutHeatmap);
-                    // 1. Endurance (oś czasu już w backendzie została przedłużona o 21 dni)
+                        yaxis: { autorange: 'reversed', fixedrange: true },
+                        xaxis: { fixedrange: true, tickangle: -45 }, margin: { t: 40, b: 60, l: 40, r: 20 }, plot_bgcolor: 'white'
+                    });
+
+                    // 1. Endurance
                     const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: 'blue', width: 2} };
                     const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (Zmęczenie)', line: {color: 'red', dash: 'dot', width: 2} };
-                    
-                    // Linię dzisiejszego dnia musimy narysować ręcznie (na bazie JavaScript Date)
                     const todayStr = new Date().toISOString().split('T')[0];
-                    const layoutEndurance = { 
+                    Plotly.newPlot('chart-endurance', [traceCTL, traceATL], { 
                         title: 'Endurance Score (TRIMP)', hovermode: 'x unified',
                         shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }]
-                    };
-                    Plotly.newPlot('chart-endurance', [traceCTL, traceATL], layoutEndurance);
+                    });
 
-                    // 2. EF połączone z HRV (Dual Axis)
+                    // 2. EF + HRV
                     const validHrv = [];
                     data.dates.forEach((d, i) => {
-                        if (data.hrv_upper[i] !== null && data.hrv_lower[i] !== null) {
-                            validHrv.push({date: d, upper: data.hrv_upper[i], lower: data.hrv_lower[i]});
-                        }
+                        if (data.hrv_upper[i] !== null && data.hrv_lower[i] !== null) validHrv.push({date: d, upper: data.hrv_upper[i], lower: data.hrv_lower[i]});
                     });
-                    
                     const bandX = validHrv.map(item => item.date);
-                    const bandUpper = validHrv.map(item => item.upper);
-                    const bandLower = validHrv.map(item => item.lower);
-
                     const traceHrvBand = {
                         x: bandX.concat(bandX.slice().reverse()),
-                        y: bandUpper.concat(bandLower.slice().reverse()),
-                        fill: 'toself',
-                        fillcolor: 'rgba(44, 160, 44, 0.15)', // Delikatna zieleń dla pasma normy
-                        line: {color: 'transparent'},
-                        name: 'Norma HRV (±1σ z 30 dni)',
-                        yaxis: 'y2',
-                        type: 'scatter',
-                        hoverinfo: 'skip'
+                        y: validHrv.map(i => i.upper).concat(validHrv.map(i => i.lower).reverse()),
+                        fill: 'toself', fillcolor: 'rgba(44, 160, 44, 0.15)', line: {color: 'transparent'},
+                        name: 'Norma HRV (30 dni)', yaxis: 'y2', type: 'scatter', hoverinfo: 'skip'
                     };
-
-                    const traceHrv7d = {
-                        x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (Trend 7d)',
-                        line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2'
-                    };
+                    const traceHrv7d = { x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (Trend)', line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2' };
+                    const traceEF = { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 8} };
                     
-                    const traceHrvDaily = {
-                        x: data.dates, y: data.hrv, mode: 'markers', name: 'HRV Nocne',
-                        marker: {color: '#2ca02c', size: 4, opacity: 0.4}, yaxis: 'y2'
-                    };
-
-                    const traceEF = { 
-                        x: data.dates, y: data.ef, mode: 'markers', name: 'EF', 
-                        marker: {color: '#ff7f0e', size: 8} 
-                    };
-                    
-                    // Ustawienie układu dwóch osi Y dla tego modułu
-                    const layoutEF_HRV = { 
+                    Plotly.newPlot('chart-ef', [traceHrvBand, traceHrv7d, traceEF, ...addTrend('ef')], { 
                         title: 'Współczynnik Efektywności (EF) vs Osobista Norma HRV',
-                        yaxis: { title: 'EF (Moc / Tętno)', titlefont: {color: '#ff7f0e'}, tickfont: {color: '#ff7f0e'} },
-                        yaxis2: { title: 'Zmienność Tętna (ms)', titlefont: {color: '#2ca02c'}, tickfont: {color: '#2ca02c'}, overlaying: 'y', side: 'right' },
-                        hovermode: 'x unified'
-                    };
-
-                    // Rysujemy EF, tren 21-dniowy EF (z funkcji addTrend), dziennie HRV, Trend HRV i Pasmo
-                    Plotly.newPlot('chart-ef', [traceHrvBand, traceHrv7d, traceHrvDaily, traceEF, ...addTrend('ef')], layoutEF_HRV);
+                        yaxis: { title: 'EF (Moc / Tętno)', titlefont: {color: '#ff7f0e'} },
+                        yaxis2: { title: 'Zmienność Tętna (ms)', titlefont: {color: '#2ca02c'}, overlaying: 'y', side: 'right' }, hovermode: 'x unified'
+                    });
 
                     // 3. Moc
                     const tracePow = { x: data.dates, y: data.pow, mode: 'markers', name: 'Moc (W)', marker: {color: '#1f77b4', size: 8} };
@@ -328,23 +186,13 @@
                         text: data.pace_str, hovertemplate: '%{x}<br>Tempo: %{text} min/km<extra></extra>' 
                     };
                     Plotly.newPlot('chart-pace', [tracePace, ...addTrend('pace')], { 
-                        title: 'Średnie Tempo (min/km)',
-                        yaxis: { autorange: 'reversed' } // Szybsze tempo wyżej
+                        title: 'Średnie Tempo (min/km)', yaxis: { autorange: 'reversed' } 
                     });
                 },
                 
                 reset() {
-                    // Resetowanie interfejsu do stanu początkowego
                     this.dataLoaded = false;
-                    this.email = '';
-                    this.debug = {};
-                    
-                    // Czyszczenie pamięci przeglądarki z wykresów
-                    Plotly.purge('chart-endurance');
-                    Plotly.purge('chart-ef');
-                    Plotly.purge('chart-pow');
-                    Plotly.purge('chart-hr');
-                    Plotly.purge('chart-pace');
+                    ['chart-heatmap', 'chart-endurance', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => Plotly.purge(id));
                 }
             }))
         })
