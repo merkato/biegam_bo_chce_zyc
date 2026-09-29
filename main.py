@@ -1,4 +1,5 @@
 import math
+import time
 from fastapi import FastAPI, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -11,7 +12,6 @@ from typing import Dict
 app = FastAPI()
 templates = Jinja2Templates(directory="templates")
 
-# Pamięć podręczna RAM
 SESSION_CACHE: Dict[str, Garmin] = {}
 
 def format_pace(decimal_pace):
@@ -84,8 +84,7 @@ async def analyze_garmin(
             raise HTTPException(status_code=404, detail="Brak biegów.")
 
         if user_hr_rest is None:
-            try:
-                hr_rest = client.get_stats(date.today().isoformat()).get('restingHeartRate', 50)
+            try: hr_rest = client.get_stats(date.today().isoformat()).get('restingHeartRate', 50)
             except: hr_rest = 50
         else: hr_rest = user_hr_rest
 
@@ -117,7 +116,47 @@ async def analyze_garmin(
         daily['date'] = pd.to_datetime(daily['startTimeLocal']).dt.normalize()
         daily['pace_str'] = daily['pace_decimal'].apply(format_pace)
 
-        # Oś czasu rozciągnięta o 21 dni dla CTL/ATL
+        # --- MODUŁ HRV ---
+        hrv_records = []
+        # Dodajemy 30 dni przed startem zakresu, żeby mieć pełne dane dla początkowej średniej (SMA)
+        hrv_start_date = pd.to_datetime(start_date) - pd.Timedelta(days=30)
+        hrv_dates = pd.date_range(start=hrv_start_date, end=end_date)
+        
+        # Zabezpieczenie przed limitem IP - ucinamy historię do 120 dni, jeśli pobierany zakres jest ogromny
+        if len(hrv_dates) > 120:
+            hrv_dates = pd.date_range(start=pd.to_datetime(end_date)-pd.Timedelta(days=120), end=end_date)
+            
+        for d in hrv_dates:
+            try:
+                hrv_res = client.get_hrv_data(d.strftime('%Y-%m-%d'))
+                if isinstance(hrv_res, dict):
+                    # Różne wersje API zwracają to na dwa sposoby
+                    avg = hrv_res['hrvSummary'].get('lastNightAvg') if 'hrvSummary' in hrv_res else hrv_res.get('lastNightAvg')
+                    if avg: hrv_records.append({'date': d, 'hrv': avg})
+            except: pass
+            time.sleep(0.05) 
+            
+        if hrv_records:
+            hrv_df = pd.DataFrame(hrv_records)
+            hrv_df['date'] = pd.to_datetime(hrv_df['date'])
+            hrv_df = hrv_df.set_index('date').reindex(hrv_dates)
+            
+            # Wypełniamy ewentualne braki z jednej nocy, by nie rwało wykresów i pasma
+            hrv_df['hrv'] = pd.to_numeric(hrv_df['hrv'], errors='coerce').interpolate(method='time')
+            hrv_df['hrv_7d'] = hrv_df['hrv'].ewm(span=7, adjust=False).mean()
+            
+            # 30-dniowe okno statystyczne kroczące
+            hrv_df['hrv_30d_avg'] = hrv_df['hrv'].rolling(window=30, min_periods=1).mean()
+            hrv_df['hrv_30d_std'] = hrv_df['hrv'].rolling(window=30, min_periods=1).std().fillna(0)
+            
+            # Wyznaczanie granic pasma (1 Odchylenie Standardowe)
+            hrv_df['hrv_upper'] = hrv_df['hrv_30d_avg'] + hrv_df['hrv_30d_std']
+            hrv_df['hrv_lower'] = hrv_df['hrv_30d_avg'] - hrv_df['hrv_30d_std']
+            hrv_df = hrv_df.reset_index().rename(columns={'index': 'date'})
+        else:
+            hrv_df = pd.DataFrame(columns=['date', 'hrv', 'hrv_7d', 'hrv_upper', 'hrv_lower'])
+        # ----------------
+
         min_d, max_d = daily['date'].min(), daily['date'].max()
         forecast_end = max(pd.Timestamp.today().normalize(), max_d) + pd.Timedelta(days=21)
         full_dates = pd.date_range(start=min_d, end=forecast_end)
@@ -128,9 +167,14 @@ async def analyze_garmin(
         daily_trimp['CTL'] = daily_trimp['trimp'].ewm(span=42, adjust=False).mean()
         daily_trimp['ATL'] = daily_trimp['trimp'].ewm(span=7, adjust=False).mean()
 
-        final_df = pd.merge(daily_trimp, daily, on='date', how='left').replace({np.nan: None})
+        final_df = pd.merge(daily_trimp, daily, on='date', how='left')
+        final_df = pd.merge(final_df, hrv_df, on='date', how='left')
+        
+        # Puste kolumny jako None, by uodpornić JSON z FastAPI
+        for col in ['hrv', 'hrv_7d', 'hrv_upper', 'hrv_lower']:
+            if col not in final_df.columns: final_df[col] = None
+        final_df = final_df.replace({np.nan: None})
 
-        # Wyliczanie trendów i predykcji
         trends = {}
         for metric, col in [('ef', 'EF'), ('pow', pow_col), ('hr', hr_col), ('pace', 'pace_decimal')]:
             h_d, h_v, f_d, f_v = get_trend_and_forecast(daily, col) if col else ([], [], [], [])
@@ -146,6 +190,10 @@ async def analyze_garmin(
             "hr": final_df.get(hr_col, pd.Series([])).tolist() if hr_col else [],
             "pace": final_df['pace_decimal'].tolist(),
             "pace_str": final_df['pace_str'].tolist(),
+            "hrv": final_df['hrv'].tolist(),
+            "hrv_7d": final_df['hrv_7d'].tolist(),
+            "hrv_upper": final_df['hrv_upper'].tolist(),
+            "hrv_lower": final_df['hrv_lower'].tolist(),
             "trends": trends
         }
         
