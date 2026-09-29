@@ -179,7 +179,53 @@ async def analyze_garmin(
         for metric, col in [('ef', 'EF'), ('pow', pow_col), ('hr', hr_col), ('pace', 'pace_decimal')]:
             h_d, h_v, f_d, f_v = get_trend_and_forecast(daily, col) if col else ([], [], [], [])
             trends[metric] = {'hist_dates': h_d, 'hist_vals': h_v, 'fut_dates': f_d, 'fut_vals': f_v}
+        # --- MODUŁ MAPY CIEPLNEJ (TRIMP) ---
+        # Bierzemy tylko historię (odcinamy prognozę w przyszłość)
+        today_ts = pd.Timestamp.today().normalize()
+        hist_df = final_df[final_df['date'] <= today_ts].copy()
+        
+        # Wyznaczamy datę poniedziałku dla każdego treningu
+        hist_df['week_start'] = hist_df['date'] - pd.to_timedelta(hist_df['date'].dt.dayofweek, unit='d')
+        hist_df['dow'] = hist_df['date'].dt.dayofweek # 0=Poniedziałek, 6=Niedziela
+        
+        if not hist_df.empty:
+            min_week = hist_df['week_start'].min()
+            max_week = hist_df['week_start'].max()
+            # Generujemy pełną oś tygodni (co 7 dni)
+            weeks = pd.date_range(start=min_week, end=max_week, freq='7D')
+            
+            # Pivot - tworzymy macierz 7 wierszy x N tygodni
+            hm = hist_df.pivot(index='dow', columns='week_start', values='trimp').reindex(index=range(7), columns=weeks).fillna(0)
+            heatmap_z = hm.values.tolist()
+            heatmap_x = hm.columns.strftime('%Y-%m-%d').tolist()
+        else:
+            heatmap_z, heatmap_x = [], []
+            
+        heatmap_y = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz']
+        # -----------------------------------
 
+        return {
+            "debug": {"hr_rest": hr_rest, "hr_max": hr_max},
+            "dates": final_df['date'].dt.strftime('%Y-%m-%d').tolist(),
+            "ctl": final_df['CTL'].tolist(),
+            "atl": final_df['ATL'].tolist(),
+            "ef": final_df.get('EF', pd.Series([])).tolist(),
+            "pow": final_df.get(pow_col, pd.Series([])).tolist() if pow_col else [],
+            "hr": final_df.get(hr_col, pd.Series([])).tolist() if hr_col else [],
+            "pace": final_df['pace_decimal'].tolist(),
+            "pace_str": final_df['pace_str'].tolist(),
+            "hrv": final_df['hrv'].tolist(),
+            "hrv_7d": final_df['hrv_7d'].tolist(),
+            "hrv_upper": final_df['hrv_upper'].tolist(),
+            "hrv_lower": final_df['hrv_lower'].tolist(),
+            "trends": trends,
+            
+            # Nowe dane dla mapy cieplnej
+            "hm_z": heatmap_z,
+            "hm_x": heatmap_x,
+            "hm_y": heatmap_y
+        }
+        
         return {
             "debug": {"hr_rest": hr_rest, "hr_max": hr_max},
             "dates": final_df['date'].dt.strftime('%Y-%m-%d').tolist(),
