@@ -74,14 +74,14 @@ async def analyze_garmin(
         
         activities = client.get_activities_by_date(start_date, end_date)
         if not activities:
-            raise HTTPException(status_code=404, detail="Brak aktywności.")
+            raise HTTPException(status_code=404, detail="Brak aktywności we wskazanym zakresie.")
             
         df = pd.DataFrame(activities)
         df['type_key'] = df['activityType'].apply(lambda x: x.get('typeKey', '') if isinstance(x, dict) else '')
         run_df = df[df['type_key'] == 'running'].copy()
         
         if run_df.empty:
-            raise HTTPException(status_code=404, detail="Brak biegów.")
+            raise HTTPException(status_code=404, detail="Brak biegów w wybranym zakresie dat.")
 
         if user_hr_rest is None:
             try: hr_rest = client.get_stats(date.today().isoformat()).get('restingHeartRate', 50)
@@ -118,45 +118,40 @@ async def analyze_garmin(
 
         # --- MODUŁ HRV ---
         hrv_records = []
-        # Dodajemy 30 dni przed startem zakresu, żeby mieć pełne dane dla początkowej średniej (SMA)
         hrv_start_date = pd.to_datetime(start_date) - pd.Timedelta(days=30)
         hrv_dates = pd.date_range(start=hrv_start_date, end=end_date)
         
-        # Zabezpieczenie przed limitem IP - ucinamy historię do 120 dni, jeśli pobierany zakres jest ogromny
-        if len(hrv_dates) > 120:
-            hrv_dates = pd.date_range(start=pd.to_datetime(end_date)-pd.Timedelta(days=120), end=end_date)
+        # Ochrona przed Timeoutem - blokada na max 60 dni dla nocnego tętna (30 dni bufora + 30 wyliczeń)
+        if len(hrv_dates) > 60:
+            hrv_dates = pd.date_range(start=pd.to_datetime(end_date)-pd.Timedelta(days=60), end=end_date)
             
         for d in hrv_dates:
             try:
                 hrv_res = client.get_hrv_data(d.strftime('%Y-%m-%d'))
                 if isinstance(hrv_res, dict):
-                    # Różne wersje API zwracają to na dwa sposoby
                     avg = hrv_res['hrvSummary'].get('lastNightAvg') if 'hrvSummary' in hrv_res else hrv_res.get('lastNightAvg')
                     if avg: hrv_records.append({'date': d, 'hrv': avg})
             except: pass
-            time.sleep(0.05) 
+            time.sleep(0.02) 
             
         if hrv_records:
             hrv_df = pd.DataFrame(hrv_records)
             hrv_df['date'] = pd.to_datetime(hrv_df['date'])
             hrv_df = hrv_df.set_index('date').reindex(hrv_dates)
             
-            # Wypełniamy ewentualne braki z jednej nocy, by nie rwało wykresów i pasma
             hrv_df['hrv'] = pd.to_numeric(hrv_df['hrv'], errors='coerce').interpolate(method='time')
             hrv_df['hrv_7d'] = hrv_df['hrv'].ewm(span=7, adjust=False).mean()
             
-            # 30-dniowe okno statystyczne kroczące
             hrv_df['hrv_30d_avg'] = hrv_df['hrv'].rolling(window=30, min_periods=1).mean()
             hrv_df['hrv_30d_std'] = hrv_df['hrv'].rolling(window=30, min_periods=1).std().fillna(0)
             
-            # Wyznaczanie granic pasma (1 Odchylenie Standardowe)
             hrv_df['hrv_upper'] = hrv_df['hrv_30d_avg'] + hrv_df['hrv_30d_std']
             hrv_df['hrv_lower'] = hrv_df['hrv_30d_avg'] - hrv_df['hrv_30d_std']
             hrv_df = hrv_df.reset_index().rename(columns={'index': 'date'})
         else:
             hrv_df = pd.DataFrame(columns=['date', 'hrv', 'hrv_7d', 'hrv_upper', 'hrv_lower'])
-        # ----------------
 
+        # --- MODELE I ZŁĄCZENIA ---
         min_d, max_d = daily['date'].min(), daily['date'].max()
         forecast_end = max(pd.Timestamp.today().normalize(), max_d) + pd.Timedelta(days=21)
         full_dates = pd.date_range(start=min_d, end=forecast_end)
@@ -167,34 +162,27 @@ async def analyze_garmin(
         daily_trimp['CTL'] = daily_trimp['trimp'].ewm(span=42, adjust=False).mean()
         daily_trimp['ATL'] = daily_trimp['trimp'].ewm(span=7, adjust=False).mean()
 
-        final_df = pd.merge(daily_trimp, daily, on='date', how='left')
+        # FIX: Usunięcie 'trimp' z 'daily' by uniknąć duplikatów trimp_x i trimp_y!
+        daily_for_merge = daily.drop(columns=['trimp'])
+        final_df = pd.merge(daily_trimp, daily_for_merge, on='date', how='left')
         final_df = pd.merge(final_df, hrv_df, on='date', how='left')
         
-        # Puste kolumny jako None, by uodpornić JSON z FastAPI
         for col in ['hrv', 'hrv_7d', 'hrv_upper', 'hrv_lower']:
             if col not in final_df.columns: final_df[col] = None
         final_df = final_df.replace({np.nan: None})
 
-        trends = {}
-        for metric, col in [('ef', 'EF'), ('pow', pow_col), ('hr', hr_col), ('pace', 'pace_decimal')]:
-            h_d, h_v, f_d, f_v = get_trend_and_forecast(daily, col) if col else ([], [], [], [])
-            trends[metric] = {'hist_dates': h_d, 'hist_vals': h_v, 'fut_dates': f_d, 'fut_vals': f_v}
         # --- MODUŁ MAPY CIEPLNEJ (TRIMP) ---
-        # Bierzemy tylko historię (odcinamy prognozę w przyszłość)
         today_ts = pd.Timestamp.today().normalize()
         hist_df = final_df[final_df['date'] <= today_ts].copy()
         
-        # Wyznaczamy datę poniedziałku dla każdego treningu
         hist_df['week_start'] = hist_df['date'] - pd.to_timedelta(hist_df['date'].dt.dayofweek, unit='d')
-        hist_df['dow'] = hist_df['date'].dt.dayofweek # 0=Poniedziałek, 6=Niedziela
+        hist_df['dow'] = hist_df['date'].dt.dayofweek
         
         if not hist_df.empty:
             min_week = hist_df['week_start'].min()
             max_week = hist_df['week_start'].max()
-            # Generujemy pełną oś tygodni (co 7 dni)
             weeks = pd.date_range(start=min_week, end=max_week, freq='7D')
             
-            # Pivot - tworzymy macierz 7 wierszy x N tygodni
             hm = hist_df.pivot(index='dow', columns='week_start', values='trimp').reindex(index=range(7), columns=weeks).fillna(0)
             heatmap_z = hm.values.tolist()
             heatmap_x = hm.columns.strftime('%Y-%m-%d').tolist()
@@ -202,7 +190,11 @@ async def analyze_garmin(
             heatmap_z, heatmap_x = [], []
             
         heatmap_y = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz']
-        # -----------------------------------
+
+        trends = {}
+        for metric, col in [('ef', 'EF'), ('pow', pow_col), ('hr', hr_col), ('pace', 'pace_decimal')]:
+            h_d, h_v, f_d, f_v = get_trend_and_forecast(daily, col) if col else ([], [], [], [])
+            trends[metric] = {'hist_dates': h_d, 'hist_vals': h_v, 'fut_dates': f_d, 'fut_vals': f_v}
 
         return {
             "debug": {"hr_rest": hr_rest, "hr_max": hr_max},
@@ -219,28 +211,9 @@ async def analyze_garmin(
             "hrv_upper": final_df['hrv_upper'].tolist(),
             "hrv_lower": final_df['hrv_lower'].tolist(),
             "trends": trends,
-            
-            # Nowe dane dla mapy cieplnej
             "hm_z": heatmap_z,
             "hm_x": heatmap_x,
             "hm_y": heatmap_y
-        }
-        
-        return {
-            "debug": {"hr_rest": hr_rest, "hr_max": hr_max},
-            "dates": final_df['date'].dt.strftime('%Y-%m-%d').tolist(),
-            "ctl": final_df['CTL'].tolist(),
-            "atl": final_df['ATL'].tolist(),
-            "ef": final_df.get('EF', pd.Series([])).tolist(),
-            "pow": final_df.get(pow_col, pd.Series([])).tolist() if pow_col else [],
-            "hr": final_df.get(hr_col, pd.Series([])).tolist() if hr_col else [],
-            "pace": final_df['pace_decimal'].tolist(),
-            "pace_str": final_df['pace_str'].tolist(),
-            "hrv": final_df['hrv'].tolist(),
-            "hrv_7d": final_df['hrv_7d'].tolist(),
-            "hrv_upper": final_df['hrv_upper'].tolist(),
-            "hrv_lower": final_df['hrv_lower'].tolist(),
-            "trends": trends
         }
         
     except Exception as e:
