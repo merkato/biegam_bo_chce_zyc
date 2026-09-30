@@ -8,12 +8,14 @@
     <style>
         body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; }
         .container { max-width: 1600px; margin: 0 auto; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; display: flex; flex-direction: column;}
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         
-        /* Magia elastyczności - siatka samodzielnie ustala liczbę kolumn */
-        .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(610px, 1fr)); gap: 20px; }
+        .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(600px, 1fr)); gap: 20px; }
         .full-width { grid-column: 1 / -1; margin-bottom: 0; }
+        
+        /* Gwarantuje, że wnętrze wykresu (canvas) rozciągnie się w karcie na pełną szerokość */
+        .plot-container { width: 100%; min-height: 350px; flex-grow: 1;}
         
         input, button { padding: 10px; width: 100%; box-sizing: border-box; margin-top: 5px; }
         button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px;}
@@ -23,7 +25,9 @@
 <body>
 
     <div class="container" x-data="dashboard()">
-        <h1 style="text-align: center; color: #2c3e50;">Analizator Formy Biegowej</h1>
+        <!-- Dynamiczny tytuł strony -->
+        <h1 x-show="!dataLoaded" style="text-align: center; color: #2c3e50;">Analizator Formy Biegowej</h1>
+        <h1 x-show="dataLoaded" style="text-align: center; color: #2c3e50; font-size: 2.2em;" x-cloak>🏃‍♂️ Biegam</h1>
         
         <div class="card" style="max-width: 800px; margin: 0 auto 20px auto;" x-show="!dataLoaded && !loading">
             <p style="text-align: center; color: #666; font-size: 0.95em;">
@@ -39,7 +43,6 @@
                     <div><label>Od kiedy analizować?</label><input type="date" x-model="startDate" required></div>
                     <div><label>Do kiedy analizować?</label><input type="date" x-model="endDate" required></div>
                 </div>
-                <!-- PRZYWRÓCONE POLA TĘTNA -->
                 <div class="grid-2" style="margin-top: 15px;">
                     <div><label>Tętno spoczynkowe (puste = Auto):</label><input type="number" x-model="hrRest" placeholder="Wykryj automatycznie"></div>
                     <div><label>Tętno maksymalne (puste = Auto):</label><input type="number" x-model="hrMax" placeholder="Wykryj automatycznie"></div>
@@ -53,25 +56,23 @@
             <p>🔄 Pobieranie danych, HRV, dynamiki biegu i strumieni mocy... Proszę czekać.</p>
         </div>
         
-        <div x-show="dataLoaded">
-            <div class="card full-width" style="background: #e6f2ff; border-left: 4px solid #1f77b4; padding: 12px; margin-bottom: 20px;">
-                <p style="margin: 0; font-size: 0.9em; display: flex; justify-content: space-between;">
-                    <span><strong>Fizjologia:</strong> HR Rest <span x-text="debug.hr_rest"></span> | HR Max <span x-text="debug.hr_max"></span></span>
-                    <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold;">[ Wyloguj / Zamknij ]</a>
-                </p>
+        <div x-show="dataLoaded" x-cloak>
+            <div class="card full-width" style="background: #e6f2ff; border-left: 4px solid #1f77b4; padding: 12px; margin-bottom: 20px; flex-direction: row; justify-content: space-between;">
+                <span style="font-size: 0.9em;"><strong>Fizjologia:</strong> HR Rest <span x-text="debug.hr_rest"></span> | HR Max <span x-text="debug.hr_max"></span></span>
+                <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold; font-size: 0.9em;">[ Wyloguj / Zamknij ]</a>
             </div>
 
             <!-- Dynamiczna Siatka CSS -->
             <div class="charts-grid">
-                <div class="card full-width"><div id="chart-heatmap" style="height:260px;"></div></div>
-                <div class="card full-width"><div id="chart-endurance" style="height:400px;"></div></div>
+                <div class="card full-width"><div id="chart-heatmap" class="plot-container" style="height:260px;"></div></div>
+                <div class="card full-width"><div id="chart-endurance" class="plot-container" style="height:450px;"></div></div>
                 
-                <div class="card"><div id="chart-mmp" style="height:400px;"></div></div>
-                <div class="card"><div id="chart-ef" style="height:400px;"></div></div>
-                <div class="card"><div id="chart-biomech" style="height:400px;"></div></div>
-                <div class="card"><div id="chart-pow" style="height:400px;"></div></div>
-                <div class="card"><div id="chart-hr" style="height:400px;"></div></div>
-                <div class="card"><div id="chart-pace" style="height:400px;"></div></div>
+                <div class="card"><div id="chart-mmp" class="plot-container"></div></div>
+                <div class="card"><div id="chart-ef" class="plot-container"></div></div>
+                <div class="card"><div id="chart-biomech" class="plot-container"></div></div>
+                <div class="card"><div id="chart-pow" class="plot-container"></div></div>
+                <div class="card"><div id="chart-hr" class="plot-container"></div></div>
+                <div class="card"><div id="chart-pace" class="plot-container"></div></div>
             </div>
         </div>
     </div>
@@ -124,36 +125,52 @@
                         ];
                     };
 
+                    // HEATMAPA - Workout Map
                     Plotly.newPlot('chart-heatmap', [{
                         z: data.hm_z, x: data.hm_x, y: data.hm_y, type: 'heatmap',
                         colorscale: [ [0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966'] ],
                         hoverongaps: false, xgap: 3, ygap: 3, showscale: false, hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
                     }], { 
-                        title: 'Mapa Konsekwencji (TRIMP)', yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 40, b: 40, l: 40, r: 20 }
+                        title: 'Workout map', autosize: true, yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 40, b: 40, l: 40, r: 20 }
                     }, plotConf);
 
-                    Plotly.newPlot('chart-endurance', [
-                        { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL', line: {color: 'blue', width: 2} },
-                        { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL', line: {color: 'red', dash: 'dot', width: 2} }
-                    ], { title: 'Endurance Score', hovermode: 'x unified', margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
+                    // ENDURANCE + TE STACKED BARS
+                    const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL', line: {color: 'blue', width: 2} };
+                    const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL', line: {color: 'red', dash: 'dot', width: 2} };
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    
+                    let endData = [traceCTL, traceATL];
+                    if (data.ae && data.ae.length > 0) {
+                        const traceAe = { x: data.dates, y: data.ae, type: 'bar', name: 'TE Tlen', yaxis: 'y2', marker: {color: 'rgba(52, 152, 219, 0.5)'}, hovertemplate: 'Data: %{x}<br>TE Tlen: %{y}<extra></extra>' };
+                        const traceAn = { x: data.dates, y: data.an, type: 'bar', name: 'TE Beztlen', yaxis: 'y2', marker: {color: 'rgba(155, 89, 182, 0.5)'}, hovertemplate: 'Data: %{x}<br>TE Beztlen: %{y}<extra></extra>' };
+                        endData = [traceAe, traceAn, traceCTL, traceATL];
+                    }
+
+                    Plotly.newPlot('chart-endurance', endData, { 
+                        title: 'Endurance Score & Training Effect', hovermode: 'x unified', barmode: 'stack', autosize: true,
+                        yaxis: { title: 'TRIMP' },
+                        yaxis2: { title: 'Training Effect', overlaying: 'y', side: 'right', range: [0, 10], showgrid: false },
+                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], margin: { t: 40, b: 40, l: 40, r: 40 }
+                    }, plotConf);
 
                     Plotly.newPlot('chart-mmp', [{
                         x: data.mmp_labels, y: data.mmp_vals, mode: 'lines+markers', name: 'Max Power',
                         line: {color: '#d62728', width: 3, shape: 'spline'}, marker: {size: 10, color: '#1f77b4'}, hovertemplate: 'Czas: %{x}<br>Max Moc: %{y} W<extra></extra>'
-                    }], { title: 'Krzywa Mocy MMP (Top 5)', yaxis: { title: 'Moc (W)' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
+                    }], { title: 'Krzywa Mocy MMP (Top 5)', autosize: true, yaxis: { title: 'Moc (W)' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
 
+                    // BIOMECHANIKA W CZASIE
                     const vBiomech = [];
-                    data.dates.forEach((d, i) => { if (data.vo[i] && data.gct[i] && data.pace[i]) vBiomech.push({pace: data.pace[i], pace_str: data.pace_str[i], vo: data.vo[i], gct: data.gct[i]}); });
+                    data.dates.forEach((d, i) => { if (data.vo[i] && data.gct[i] && data.pace[i]) vBiomech.push({date: d, pace: data.pace[i], pace_str: data.pace_str[i], vo: data.vo[i], gct: data.gct[i]}); });
                     if (vBiomech.length > 0) {
                         Plotly.newPlot('chart-biomech', [{
-                            x: vBiomech.map(v => v.pace), y: vBiomech.map(v => v.vo), mode: 'markers', name: 'Biomechanika',
-                            text: vBiomech.map(v => `Tempo: ${v.pace_str} min/km<br>VO: ${v.vo.toFixed(1)} cm<br>GCT: ${v.gct.toFixed(0)} ms`), hovertemplate: '%{text}<extra></extra>',
+                            x: vBiomech.map(v => v.date), y: vBiomech.map(v => v.pace), mode: 'markers', name: 'Biomechanika',
+                            text: vBiomech.map(v => `Data: ${v.date}<br>Tempo: ${v.pace_str} min/km<br>VO (rozmiar): ${v.vo.toFixed(1)} cm<br>GCT (kolor): ${v.gct.toFixed(0)} ms`), hovertemplate: '%{text}<extra></extra>',
                             marker: {
-                                size: vBiomech.map(v => v.gct), sizemode: 'area', sizeref: 2 * Math.max(...vBiomech.map(v => v.gct)) / (30**2), sizemin: 4,
-                                color: vBiomech.map(v => v.gct), colorscale: 'Viridis', showscale: true, colorbar: { title: 'GCT', thickness: 10 }
+                                size: vBiomech.map(v => v.vo * 2.5), sizemode: 'diameter',
+                                color: vBiomech.map(v => v.gct), colorscale: 'Viridis', showscale: true, colorbar: { title: 'GCT (ms)', thickness: 10 }
                             }
                         }], { 
-                            title: 'Biomechanika: Odchylenie vs GCT', xaxis: { title: 'Tempo (szybciej →)', autorange: 'reversed' }, yaxis: { title: 'Odchylenie (cm)' }, margin: { t: 40, b: 40, l: 40, r: 20 } 
+                            title: 'Biomechanika: Postęp w czasie', autosize: true, xaxis: { title: 'Data' }, yaxis: { title: 'Tempo (szybciej →)', autorange: 'reversed' }, margin: { t: 40, b: 40, l: 40, r: 20 } 
                         }, plotConf);
                     } else {
                         document.getElementById('chart-biomech').innerHTML = '<p style="text-align:center; padding-top:150px; color:#999;">Brak danych z dynamiki biegu (HRM-Pro)</p>';
@@ -165,11 +182,11 @@
                         { x: bandX.concat(bandX.slice().reverse()), y: bandU.concat(bandL.slice().reverse()), fill: 'toself', fillcolor: 'rgba(44, 160, 44, 0.15)', line: {color: 'transparent'}, name: 'Norma HRV', yaxis: 'y2', type: 'scatter', hoverinfo: 'skip' },
                         { x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (7d)', line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2' },
                         { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 8} }, ...addTrend('ef')
-                    ], { title: 'Współczynnik EF vs HRV', yaxis: { title: 'EF' }, yaxis2: { title: 'HRV (ms)', overlaying: 'y', side: 'right' }, hovermode: 'x unified', margin: { t: 40, b: 40, l: 40, r: 40 } }, plotConf);
+                    ], { title: 'Współczynnik EF vs HRV', autosize: true, yaxis: { title: 'EF' }, yaxis2: { title: 'HRV (ms)', overlaying: 'y', side: 'right' }, hovermode: 'x unified', margin: { t: 40, b: 40, l: 40, r: 40 } }, plotConf);
 
-                    Plotly.newPlot('chart-pow', [{ x: data.dates, y: data.pow, mode: 'markers', name: 'Moc', marker: {color: '#1f77b4', size: 8} }, ...addTrend('pow')], { title: 'Średnia Moc (W)', margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
-                    Plotly.newPlot('chart-hr', [{ x: data.dates, y: data.hr, mode: 'markers', name: 'HR', marker: {color: '#2ca02c', size: 8} }, ...addTrend('hr')], { title: 'Średnie Tętno (BPM)', margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
-                    Plotly.newPlot('chart-pace', [{ x: data.dates, y: data.pace, mode: 'markers', name: 'Tempo', marker: {color: '#9467bd', size: 8}, text: data.pace_str, hovertemplate: 'Tempo: %{text} min/km<extra></extra>' }, ...addTrend('pace')], { title: 'Średnie Tempo (min/km)', yaxis: { autorange: 'reversed' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
+                    Plotly.newPlot('chart-pow', [{ x: data.dates, y: data.pow, mode: 'markers', name: 'Moc', marker: {color: '#1f77b4', size: 8} }, ...addTrend('pow')], { title: 'Średnia Moc (W)', autosize: true, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
+                    Plotly.newPlot('chart-hr', [{ x: data.dates, y: data.hr, mode: 'markers', name: 'HR', marker: {color: '#2ca02c', size: 8} }, ...addTrend('hr')], { title: 'Średnie Tętno (BPM)', autosize: true, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
+                    Plotly.newPlot('chart-pace', [{ x: data.dates, y: data.pace, mode: 'markers', name: 'Tempo', marker: {color: '#9467bd', size: 8}, text: data.pace_str, hovertemplate: 'Tempo: %{text} min/km<extra></extra>' }, ...addTrend('pace')], { title: 'Średnie Tempo (min/km)', autosize: true, yaxis: { autorange: 'reversed' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
                 },
                 
                 reset() {
