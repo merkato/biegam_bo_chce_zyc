@@ -7,7 +7,7 @@
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; }
-        .container { max-width: 1600px; margin: 0 auto; } /* Nowy, szeroki kontener */
+        .container { max-width: 1600px; margin: 0 auto; }
         .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         
@@ -39,6 +39,11 @@
                     <div><label>Od kiedy analizować?</label><input type="date" x-model="startDate" required></div>
                     <div><label>Do kiedy analizować?</label><input type="date" x-model="endDate" required></div>
                 </div>
+                <!-- PRZYWRÓCONE POLA TĘTNA -->
+                <div class="grid-2" style="margin-top: 15px;">
+                    <div><label>Tętno spoczynkowe (puste = Auto):</label><input type="number" x-model="hrRest" placeholder="Wykryj automatycznie"></div>
+                    <div><label>Tętno maksymalne (puste = Auto):</label><input type="number" x-model="hrMax" placeholder="Wykryj automatycznie"></div>
+                </div>
                 <button type="submit">Generuj Dashboard</button>
             </form>
             <div x-show="error" style="background: #fee; color: #c00; padding: 10px; border-radius: 4px; margin-top: 15px;" x-text="error"></div>
@@ -58,11 +63,9 @@
 
             <!-- Dynamiczna Siatka CSS -->
             <div class="charts-grid">
-                <!-- Wielkie moduły zajmują całą szerokość ekranu -->
                 <div class="card full-width"><div id="chart-heatmap" style="height:260px;"></div></div>
                 <div class="card full-width"><div id="chart-endurance" style="height:400px;"></div></div>
                 
-                <!-- Mniejsze kafelki automatycznie ułożą się po 2 lub 3 w rzędzie w zależności od wielkości ekranu -->
                 <div class="card"><div id="chart-mmp" style="height:400px;"></div></div>
                 <div class="card"><div id="chart-ef" style="height:400px;"></div></div>
                 <div class="card"><div id="chart-biomech" style="height:400px;"></div></div>
@@ -82,13 +85,15 @@
 
             Alpine.data('dashboard', () => ({
                 email: '', password: '', startDate: formatDate(pastDate), endDate: formatDate(today),
-                loading: false, dataLoaded: false, error: '', debug: {},
+                hrRest: '', hrMax: '', loading: false, dataLoaded: false, error: '', debug: {},
                 
                 async fetchData() {
                     this.loading = true; this.error = '';
                     const formData = new FormData();
                     formData.append('email', this.email); formData.append('password', this.password);
                     formData.append('start_date', this.startDate); formData.append('end_date', this.endDate);
+                    if (this.hrRest) formData.append('user_hr_rest', this.hrRest);
+                    if (this.hrMax) formData.append('user_hr_max', this.hrMax);
                     
                     try {
                         const response = await fetch('/api/analyze', { method: 'POST', body: formData });
@@ -108,7 +113,7 @@
                 },
                 
                 drawCharts(data) {
-                    const plotConf = { responsive: true, displayModeBar: false }; // Plotly automatycznie reaguje na zmianę szerokości karty!
+                    const plotConf = { responsive: true, displayModeBar: false }; 
 
                     const addTrend = (metricKey) => {
                         const tr = data.trends[metricKey];
@@ -137,7 +142,6 @@
                         line: {color: '#d62728', width: 3, shape: 'spline'}, marker: {size: 10, color: '#1f77b4'}, hovertemplate: 'Czas: %{x}<br>Max Moc: %{y} W<extra></extra>'
                     }], { title: 'Krzywa Mocy MMP (Top 5)', yaxis: { title: 'Moc (W)' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
 
-                    // Biomechanika (Bubble Chart)
                     const vBiomech = [];
                     data.dates.forEach((d, i) => { if (data.vo[i] && data.gct[i] && data.pace[i]) vBiomech.push({pace: data.pace[i], pace_str: data.pace_str[i], vo: data.vo[i], gct: data.gct[i]}); });
                     if (vBiomech.length > 0) {
