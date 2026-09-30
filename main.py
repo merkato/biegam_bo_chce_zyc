@@ -97,6 +97,10 @@ async def analyze_garmin(
         hr_col = next((c for c in ['averageHR', 'averageHeartRateInBeatsPerMinute', 'averageBpm'] if c in run_df.columns), None)
         gap_col = next((c for c in ['averageGradeAdjustedSpeed', 'avgGradeAdjustedSpeed', 'averageSpeed'] if c in run_df.columns), None)
         dur_col = next((c for c in ['duration', 'movingDuration'] if c in run_df.columns), None)
+        
+        # Ekstrakcja danych biomechanicznych (HRM-Pro)
+        vo_col = next((c for c in ['averageVerticalOscillation', 'avgVerticalOscillation'] if c in run_df.columns), None)
+        gct_col = next((c for c in ['averageGroundContactTime', 'avgGroundContactTime'] if c in run_df.columns), None)
 
         if gap_col:
             run_df[gap_col] = pd.to_numeric(run_df[gap_col], errors='coerce')
@@ -107,13 +111,11 @@ async def analyze_garmin(
         run_df['EF'] = run_df[pow_col] / run_df[hr_col] if pow_col and hr_col else np.nan
         run_df['trimp'] = run_df.apply(lambda row: calculate_trimp(row.get(hr_col), row.get(dur_col), hr_rest, hr_max), axis=1)
 
-        # --- MODUŁ MMP (Krzywa Mocy) ---
         mmp_windows = [10, 30, 60, 300, 1200, 3600]
         mmp_labels = ['10s', '30s', '1 min', '5 min', '20 min', '1 godz.']
         max_powers = {w: 0 for w in mmp_windows}
         
         if not run_df.empty and 'trimp' in run_df.columns:
-            # Sortujemy i bierzemy top 5 najcięższych treningów w wybranym okresie
             top_runs = run_df.nlargest(5, 'trimp')
             for _, row in top_runs.iterrows():
                 try:
@@ -122,31 +124,23 @@ async def analyze_garmin(
                         details = client.get_activity_details(act_id)
                         p_idx = next((i.get('metricsIndex') for i in details.get('metricDescriptors', []) if i.get('key') in ['directPower', 'power']), None)
                         if p_idx is not None:
-                            power_data = []
-                            for m in details.get('activityDetailMetrics', []):
-                                vals = m.get('metrics', [])
-                                if len(vals) > p_idx and vals[p_idx] is not None:
-                                    power_data.append(vals[p_idx])
-                                else:
-                                    power_data.append(0)
-                            
-                            # Algorytm rosnących okien czasowych (Rolling Mean)
+                            power_data = [vals[p_idx] if len(vals) > p_idx and vals[p_idx] is not None else 0 for m in details.get('activityDetailMetrics', []) for vals in [m.get('metrics', [])]]
                             if power_data:
                                 s = pd.Series(power_data)
                                 for w in mmp_windows:
                                     if len(s) >= w:
                                         w_max = s.rolling(w).mean().max()
                                         if w_max > max_powers[w]: max_powers[w] = w_max
-                except:
-                    pass
-                time.sleep(0.05) # Mikrosekundowy oddech dla Garmina by nie zarobić bana
+                except: pass
+                time.sleep(0.05)
                 
         mmp_vals = [round(max_powers[w], 1) if not pd.isna(max_powers[w]) else 0 for w in mmp_windows]
-        # -----------------------------------
         
         agg_dict = {'pace_decimal': 'mean', 'trimp': 'sum'}
         if pow_col: agg_dict[pow_col] = 'mean'
         if hr_col: agg_dict[hr_col] = 'mean'
+        if vo_col: agg_dict[vo_col] = 'mean'
+        if gct_col: agg_dict[gct_col] = 'mean'
         if 'EF' in run_df.columns: agg_dict['EF'] = 'mean'
             
         daily = run_df.groupby('startTimeLocal').agg(agg_dict).reset_index()
@@ -205,16 +199,11 @@ async def analyze_garmin(
         hist_df['week_start'] = hist_df['date'] - pd.to_timedelta(hist_df['date'].dt.dayofweek, unit='d')
         hist_df['dow'] = hist_df['date'].dt.dayofweek
         if not hist_df.empty:
-            min_week = hist_df['week_start'].min()
-            max_week = hist_df['week_start'].max()
-            weeks = pd.date_range(start=min_week, end=max_week, freq='7D')
+            weeks = pd.date_range(start=hist_df['week_start'].min(), end=hist_df['week_start'].max(), freq='7D')
             hm = hist_df.pivot(index='dow', columns='week_start', values='trimp').reindex(index=range(7), columns=weeks).fillna(0)
-            heatmap_z = hm.values.tolist()
-            heatmap_x = hm.columns.strftime('%Y-%m-%d').tolist()
+            heatmap_z, heatmap_x = hm.values.tolist(), hm.columns.strftime('%Y-%m-%d').tolist()
         else: heatmap_z, heatmap_x = [], []
             
-        heatmap_y = ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz']
-
         trends = {}
         for metric, col in [('ef', 'EF'), ('pow', pow_col), ('hr', hr_col), ('pace', 'pace_decimal')]:
             h_d, h_v, f_d, f_v = get_trend_and_forecast(daily, col) if col else ([], [], [], [])
@@ -228,6 +217,8 @@ async def analyze_garmin(
             "ef": final_df.get('EF', pd.Series([])).tolist(),
             "pow": final_df.get(pow_col, pd.Series([])).tolist() if pow_col else [],
             "hr": final_df.get(hr_col, pd.Series([])).tolist() if hr_col else [],
+            "vo": final_df.get(vo_col, pd.Series([])).tolist() if vo_col else [],
+            "gct": final_df.get(gct_col, pd.Series([])).tolist() if gct_col else [],
             "pace": final_df['pace_decimal'].tolist(),
             "pace_str": final_df['pace_str'].tolist(),
             "hrv": final_df['hrv'].tolist(),
@@ -235,11 +226,8 @@ async def analyze_garmin(
             "hrv_upper": final_df['hrv_upper'].tolist(),
             "hrv_lower": final_df['hrv_lower'].tolist(),
             "trends": trends,
-            "hm_z": heatmap_z,
-            "hm_x": heatmap_x,
-            "hm_y": heatmap_y,
-            "mmp_labels": mmp_labels,
-            "mmp_vals": mmp_vals
+            "hm_z": heatmap_z, "hm_x": heatmap_x, "hm_y": ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz'],
+            "mmp_labels": mmp_labels, "mmp_vals": mmp_vals
         }
         
     except Exception as e:
