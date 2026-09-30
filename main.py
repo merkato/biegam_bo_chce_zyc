@@ -98,9 +98,12 @@ async def analyze_garmin(
         gap_col = next((c for c in ['averageGradeAdjustedSpeed', 'avgGradeAdjustedSpeed', 'averageSpeed'] if c in run_df.columns), None)
         dur_col = next((c for c in ['duration', 'movingDuration'] if c in run_df.columns), None)
         
-        # Ekstrakcja danych biomechanicznych (HRM-Pro)
         vo_col = next((c for c in ['averageVerticalOscillation', 'avgVerticalOscillation'] if c in run_df.columns), None)
         gct_col = next((c for c in ['averageGroundContactTime', 'avgGroundContactTime'] if c in run_df.columns), None)
+        
+        # Ekstrakcja Training Effect (TE)
+        ae_col = next((c for c in ['aerobicTrainingEffect'] if c in run_df.columns), None)
+        an_col = next((c for c in ['anaerobicTrainingEffect'] if c in run_df.columns), None)
 
         if gap_col:
             run_df[gap_col] = pd.to_numeric(run_df[gap_col], errors='coerce')
@@ -141,6 +144,8 @@ async def analyze_garmin(
         if hr_col: agg_dict[hr_col] = 'mean'
         if vo_col: agg_dict[vo_col] = 'mean'
         if gct_col: agg_dict[gct_col] = 'mean'
+        if ae_col: agg_dict[ae_col] = 'sum'
+        if an_col: agg_dict[an_col] = 'sum'
         if 'EF' in run_df.columns: agg_dict['EF'] = 'mean'
             
         daily = run_df.groupby('startTimeLocal').agg(agg_dict).reset_index()
@@ -219,6 +224,8 @@ async def analyze_garmin(
             "hr": final_df.get(hr_col, pd.Series([])).tolist() if hr_col else [],
             "vo": final_df.get(vo_col, pd.Series([])).tolist() if vo_col else [],
             "gct": final_df.get(gct_col, pd.Series([])).tolist() if gct_col else [],
+            "ae": final_df.get(ae_col, pd.Series([])).tolist() if ae_col else [],
+            "an": final_df.get(an_col, pd.Series([])).tolist() if an_col else [],
             "pace": final_df['pace_decimal'].tolist(),
             "pace_str": final_df['pace_str'].tolist(),
             "hrv": final_df['hrv'].tolist(),
