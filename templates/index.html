@@ -8,26 +8,41 @@
     <style>
         body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; }
         .container { max-width: 1800px; margin: 0 auto; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; margin-bottom: 20px;}
+        
+        .card { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+            display: flex; 
+            flex-direction: column; 
+            min-width: 0; /* KLUCZOWY FIX: Zapobiega ucinaniu wykresów Plotly w siatce */
+            margin-bottom: 20px;
+        }
+        
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         
-        /* Zmieniona siatka: dense pozwala na sprytne upychanie elementów, min 450px na kafelek */
+        /* PANCERNA SIATKA (Zamiast problematycznego auto-fit i dense) */
         .charts-grid { 
             display: grid; 
-            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); 
+            grid-template-columns: 1fr; /* Domyślnie 1 kolumna dla telefonów */
             gap: 20px; 
-            grid-auto-flow: dense;
         }
         
-        .full-width { grid-column: 1 / -1; margin-bottom: 0; }
-        
-        /* Klasa half-width pozwoli umieścić np. 2 duże wykresy u góry na mniejszych, i w 1 rzędzie na większych */
-        @media (min-width: 950px) {
-            .half-width { grid-column: span 2; }
+        /* Na laptopach 2 kolumny */
+        @media (min-width: 900px) {
+            .charts-grid { grid-template-columns: 1fr 1fr; }
         }
+        
+        /* Na bardzo szerokich monitorach 3 kolumny */
+        @media (min-width: 1400px) {
+            .charts-grid { grid-template-columns: 1fr 1fr 1fr; }
+        }
+        
+        .full-width { grid-column: 1 / -1 !important; margin-bottom: 0; }
         
         .plot-container { width: 100%; min-height: 350px; flex-grow: 1; }
-        .heatmap-container { width: 100%; min-height: 250px; flex-grow: 1; display:flex; justify-content:center;}
+        .heatmap-container { width: 100%; min-height: 250px; flex-grow: 1; display: flex; justify-content: center; }
         
         input, button { padding: 10px; width: 100%; box-sizing: border-box; margin-top: 5px; }
         button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px;}
@@ -73,16 +88,14 @@
                 <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold; font-size: 0.9em;">[ Wyloguj / Zamknij ]</a>
             </div>
 
-            <!-- Dynamiczna Siatka CSS -->
             <div class="charts-grid">
-                <!-- Heatmapa teraz zajmie tyle ile potrzebuje szerokości, ale by nie miała białych plam, centrujemy jej div-->
+                <!-- Moduły zawsze na całą szerokość -->
                 <div class="card full-width"><div id="chart-heatmap" class="heatmap-container"></div></div>
-                <!-- Endurance zyskuje klasę pełnej szerokości, ale z usuniętymi sztywnymi marginesami w JS -->
                 <div class="card full-width"><div id="chart-endurance" class="plot-container" style="height:450px;"></div></div>
                 
-                <div class="card half-width"><div id="chart-mmp" class="plot-container"></div></div>
-                <div class="card half-width"><div id="chart-ef" class="plot-container"></div></div>
-                
+                <!-- Kafelki układające się w 1, 2 lub 3 kolumnach w zależności od ekranu -->
+                <div class="card"><div id="chart-mmp" class="plot-container"></div></div>
+                <div class="card"><div id="chart-ef" class="plot-container"></div></div>
                 <div class="card"><div id="chart-biomech" class="plot-container"></div></div>
                 <div class="card"><div id="chart-pow" class="plot-container"></div></div>
                 <div class="card"><div id="chart-hr" class="plot-container"></div></div>
@@ -144,7 +157,7 @@
                         colorscale: [ [0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966'] ],
                         hoverongaps: false, xgap: 3, ygap: 3, showscale: false, hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
                     }], { 
-                        title: 'Workout map', autosize: true, yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 40, b: 40, l: 20, r: 20 }
+                        title: 'Workout map', autosize: true, yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 40, b: 40, l: 40, r: 20 }
                     }, plotConf);
 
                     const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL', line: {color: 'blue', width: 2} };
@@ -158,12 +171,11 @@
                         endData = [traceAe, traceAn, traceCTL, traceATL];
                     }
 
-                    // Usunieto margines prawy "r:40" z Endurance by wypelnialo ekran
                     Plotly.newPlot('chart-endurance', endData, { 
                         title: 'Endurance Score & Training Effect', hovermode: 'x unified', barmode: 'stack', autosize: true,
                         yaxis: { title: 'TRIMP' },
                         yaxis2: { title: 'Training Effect', overlaying: 'y', side: 'right', range: [0, 10], showgrid: false },
-                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], margin: { t: 40, b: 40, l: 40, r: 10 }
+                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], margin: { t: 40, b: 40, l: 40, r: 40 }
                     }, plotConf);
 
                     Plotly.newPlot('chart-mmp', [{
@@ -185,7 +197,7 @@
                             title: 'Biomechanika: Postęp w czasie', autosize: true, xaxis: { title: 'Data' }, yaxis: { title: 'Tempo (szybciej →)', autorange: 'reversed' }, margin: { t: 40, b: 40, l: 40, r: 20 } 
                         }, plotConf);
                     } else {
-                        document.getElementById('chart-biomech').innerHTML = '<p style="text-align:center; padding-top:150px; color:#999;">Brak danych z dynamiki biegu (HRM-Pro)</p>';
+                        document.getElementById('chart-biomech').innerHTML = '<p style="text-align:center; padding-top:150px; color:#999;">Brak danych z dynamiki biegu</p>';
                     }
 
                     const bandX = []; const bandU = []; const bandL = [];
