@@ -7,15 +7,27 @@
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; }
-        .container { max-width: 1600px; margin: 0 auto; }
-        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; display: flex; flex-direction: column;}
+        .container { max-width: 1800px; margin: 0 auto; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; margin-bottom: 20px;}
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         
-        .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(600px, 1fr)); gap: 20px; }
+        /* Zmieniona siatka: dense pozwala na sprytne upychanie elementów, min 450px na kafelek */
+        .charts-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); 
+            gap: 20px; 
+            grid-auto-flow: dense;
+        }
+        
         .full-width { grid-column: 1 / -1; margin-bottom: 0; }
         
-        /* Gwarantuje, że wnętrze wykresu (canvas) rozciągnie się w karcie na pełną szerokość */
-        .plot-container { width: 100%; min-height: 350px; flex-grow: 1;}
+        /* Klasa half-width pozwoli umieścić np. 2 duże wykresy u góry na mniejszych, i w 1 rzędzie na większych */
+        @media (min-width: 950px) {
+            .half-width { grid-column: span 2; }
+        }
+        
+        .plot-container { width: 100%; min-height: 350px; flex-grow: 1; }
+        .heatmap-container { width: 100%; min-height: 250px; flex-grow: 1; display:flex; justify-content:center;}
         
         input, button { padding: 10px; width: 100%; box-sizing: border-box; margin-top: 5px; }
         button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px;}
@@ -25,7 +37,6 @@
 <body>
 
     <div class="container" x-data="dashboard()">
-        <!-- Dynamiczny tytuł strony -->
         <h1 x-show="!dataLoaded" style="text-align: center; color: #2c3e50;">Analizator Formy Biegowej</h1>
         <h1 x-show="dataLoaded" style="text-align: center; color: #2c3e50; font-size: 2.2em;" x-cloak>🏃‍♂️ Biegam</h1>
         
@@ -64,11 +75,14 @@
 
             <!-- Dynamiczna Siatka CSS -->
             <div class="charts-grid">
-                <div class="card full-width"><div id="chart-heatmap" class="plot-container" style="height:260px;"></div></div>
+                <!-- Heatmapa teraz zajmie tyle ile potrzebuje szerokości, ale by nie miała białych plam, centrujemy jej div-->
+                <div class="card full-width"><div id="chart-heatmap" class="heatmap-container"></div></div>
+                <!-- Endurance zyskuje klasę pełnej szerokości, ale z usuniętymi sztywnymi marginesami w JS -->
                 <div class="card full-width"><div id="chart-endurance" class="plot-container" style="height:450px;"></div></div>
                 
-                <div class="card"><div id="chart-mmp" class="plot-container"></div></div>
-                <div class="card"><div id="chart-ef" class="plot-container"></div></div>
+                <div class="card half-width"><div id="chart-mmp" class="plot-container"></div></div>
+                <div class="card half-width"><div id="chart-ef" class="plot-container"></div></div>
+                
                 <div class="card"><div id="chart-biomech" class="plot-container"></div></div>
                 <div class="card"><div id="chart-pow" class="plot-container"></div></div>
                 <div class="card"><div id="chart-hr" class="plot-container"></div></div>
@@ -125,16 +139,14 @@
                         ];
                     };
 
-                    // HEATMAPA - Workout Map
                     Plotly.newPlot('chart-heatmap', [{
                         z: data.hm_z, x: data.hm_x, y: data.hm_y, type: 'heatmap',
                         colorscale: [ [0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966'] ],
                         hoverongaps: false, xgap: 3, ygap: 3, showscale: false, hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
                     }], { 
-                        title: 'Workout map', autosize: true, yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 40, b: 40, l: 40, r: 20 }
+                        title: 'Workout map', autosize: true, yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 40, b: 40, l: 20, r: 20 }
                     }, plotConf);
 
-                    // ENDURANCE + TE STACKED BARS
                     const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL', line: {color: 'blue', width: 2} };
                     const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL', line: {color: 'red', dash: 'dot', width: 2} };
                     const todayStr = new Date().toISOString().split('T')[0];
@@ -146,11 +158,12 @@
                         endData = [traceAe, traceAn, traceCTL, traceATL];
                     }
 
+                    // Usunieto margines prawy "r:40" z Endurance by wypelnialo ekran
                     Plotly.newPlot('chart-endurance', endData, { 
                         title: 'Endurance Score & Training Effect', hovermode: 'x unified', barmode: 'stack', autosize: true,
                         yaxis: { title: 'TRIMP' },
                         yaxis2: { title: 'Training Effect', overlaying: 'y', side: 'right', range: [0, 10], showgrid: false },
-                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], margin: { t: 40, b: 40, l: 40, r: 40 }
+                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], margin: { t: 40, b: 40, l: 40, r: 10 }
                     }, plotConf);
 
                     Plotly.newPlot('chart-mmp', [{
@@ -158,7 +171,6 @@
                         line: {color: '#d62728', width: 3, shape: 'spline'}, marker: {size: 10, color: '#1f77b4'}, hovertemplate: 'Czas: %{x}<br>Max Moc: %{y} W<extra></extra>'
                     }], { title: 'Krzywa Mocy MMP (Top 5)', autosize: true, yaxis: { title: 'Moc (W)' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
 
-                    // BIOMECHANIKA W CZASIE
                     const vBiomech = [];
                     data.dates.forEach((d, i) => { if (data.vo[i] && data.gct[i] && data.pace[i]) vBiomech.push({date: d, pace: data.pace[i], pace_str: data.pace_str[i], vo: data.vo[i], gct: data.gct[i]}); });
                     if (vBiomech.length > 0) {
