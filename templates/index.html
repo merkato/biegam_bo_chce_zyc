@@ -6,6 +6,7 @@
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
+        [x-cloak] { display: none !important; }
         body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; }
         .container { max-width: 1800px; margin: 0 auto; }
         
@@ -16,33 +17,35 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
             display: flex; 
             flex-direction: column; 
-            min-width: 0; /* KLUCZOWY FIX: Zapobiega ucinaniu wykresów Plotly w siatce */
-            margin-bottom: 20px;
+            min-width: 0; 
+            overflow: hidden; /* Gwarantuje, że wykres nigdy nie wyjdzie poza kafelek */
+            box-sizing: border-box;
         }
         
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         
-        /* PANCERNA SIATKA (Zamiast problematycznego auto-fit i dense) */
+        /* Siatka wykresów */
         .charts-grid { 
             display: grid; 
-            grid-template-columns: 1fr; /* Domyślnie 1 kolumna dla telefonów */
+            grid-template-columns: 1fr; 
             gap: 20px; 
+            width: 100%;
         }
         
-        /* Na laptopach 2 kolumny */
+        /* 2 kolumny na laptopach */
         @media (min-width: 900px) {
-            .charts-grid { grid-template-columns: 1fr 1fr; }
+            .charts-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         
-        /* Na bardzo szerokich monitorach 3 kolumny */
-        @media (min-width: 1400px) {
-            .charts-grid { grid-template-columns: 1fr 1fr 1fr; }
+        /* 3 kolumny na dużych monitorach (powyżej 1500px, żeby wykresy miały oddech) */
+        @media (min-width: 1500px) {
+            .charts-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
         
-        .full-width { grid-column: 1 / -1 !important; margin-bottom: 0; }
+        .full-width { grid-column: 1 / -1 !important; }
         
-        .plot-container { width: 100%; min-height: 350px; flex-grow: 1; }
-        .heatmap-container { width: 100%; min-height: 250px; flex-grow: 1; display: flex; justify-content: center; }
+        .plot-container { width: 100%; height: 380px; }
+        .heatmap-container { width: 100%; height: 240px; }
         
         input, button { padding: 10px; width: 100%; box-sizing: border-box; margin-top: 5px; }
         button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px;}
@@ -78,7 +81,7 @@
             <div x-show="error" style="background: #fee; color: #c00; padding: 10px; border-radius: 4px; margin-top: 15px;" x-text="error"></div>
         </div>
 
-        <div class="card" x-show="loading" style="text-align: center; max-width: 800px; margin: 0 auto;">
+        <div class="card" x-show="loading" style="text-align: center; max-width: 800px; margin: 0 auto;" x-cloak>
             <p>🔄 Pobieranie danych, HRV, dynamiki biegu i strumieni mocy... Proszę czekać.</p>
         </div>
         
@@ -93,7 +96,7 @@
                 <div class="card full-width"><div id="chart-heatmap" class="heatmap-container"></div></div>
                 <div class="card full-width"><div id="chart-endurance" class="plot-container" style="height:450px;"></div></div>
                 
-                <!-- Kafelki układające się w 1, 2 lub 3 kolumnach w zależności od ekranu -->
+                <!-- Kafelki w siatce 1 / 2 / 3 kolumnowej -->
                 <div class="card"><div id="chart-mmp" class="plot-container"></div></div>
                 <div class="card"><div id="chart-ef" class="plot-container"></div></div>
                 <div class="card"><div id="chart-biomech" class="plot-container"></div></div>
@@ -126,13 +129,22 @@
                     try {
                         const response = await fetch('/api/analyze', { method: 'POST', body: formData });
                         if (!response.ok) {
-                            const errData = await response.json();
-                            throw new Error(errData.detail || 'Wystąpił błąd podczas analizy.');
+                            const contentType = response.headers.get("content-type");
+                            if (contentType && contentType.indexOf("application/json") !== -1) {
+                                const errData = await response.json();
+                                throw new Error(errData.detail || 'Wystąpił błąd podczas analizy.');
+                            } else {
+                                throw new Error(`Błąd serwera (HTTP ${response.status}).`);
+                            }
                         }
                         const data = await response.json();
                         this.debug = data.debug;
-                        this.drawCharts(data);
+                        
+                        // KLUCZOWY FIX: Najpierw odkrywamy kontenery HTML, a rysujemy dopiero w następnej klatce ($nextTick), gdy mają już szerokość!
                         this.dataLoaded = true;
+                        this.$nextTick(() => {
+                            this.drawCharts(data);
+                        });
                     } catch (e) {
                         this.error = e.message;
                     } finally {
@@ -142,6 +154,9 @@
                 
                 drawCharts(data) {
                     const plotConf = { responsive: true, displayModeBar: false }; 
+                    
+                    // Wspólna konfiguracja legendy na górze wykresu (zapobiega ucinaniu z prawej strony)
+                    const topLegend = { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'right', x: 1 };
 
                     const addTrend = (metricKey) => {
                         const tr = data.trends[metricKey];
@@ -152,37 +167,76 @@
                         ];
                     };
 
+                    // 0. WORKOUT MAP (Pełna szerokość)
                     Plotly.newPlot('chart-heatmap', [{
                         z: data.hm_z, x: data.hm_x, y: data.hm_y, type: 'heatmap',
                         colorscale: [ [0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966'] ],
                         hoverongaps: false, xgap: 3, ygap: 3, showscale: false, hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
                     }], { 
-                        title: 'Workout map', autosize: true, yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 40, b: 40, l: 40, r: 20 }
+                        title: { text: 'Workout map', x: 0.01 },
+                        autosize: true,
+                        yaxis: { autorange: 'reversed', fixedrange: true }, 
+                        xaxis: { fixedrange: true }, 
+                        margin: { t: 50, b: 40, l: 40, r: 20 }
                     }, plotConf);
 
-                    const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL', line: {color: 'blue', width: 2} };
-                    const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL', line: {color: 'red', dash: 'dot', width: 2} };
+                    // 1. ENDURANCE SCORE & TE (Pełna szerokość + Jaskrawoczerwony TE Beztlenowy)
+                    const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: '#0052cc', width: 2.5} };
+                    const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (Zmęczenie)', line: {color: '#2c3e50', dash: 'dot', width: 2} };
                     const todayStr = new Date().toISOString().split('T')[0];
                     
                     let endData = [traceCTL, traceATL];
                     if (data.ae && data.ae.length > 0) {
-                        const traceAe = { x: data.dates, y: data.ae, type: 'bar', name: 'TE Tlen', yaxis: 'y2', marker: {color: 'rgba(52, 152, 219, 0.5)'}, hovertemplate: 'Data: %{x}<br>TE Tlen: %{y}<extra></extra>' };
-                        const traceAn = { x: data.dates, y: data.an, type: 'bar', name: 'TE Beztlen', yaxis: 'y2', marker: {color: 'rgba(155, 89, 182, 0.5)'}, hovertemplate: 'Data: %{x}<br>TE Beztlen: %{y}<extra></extra>' };
+                        const traceAe = { 
+                            x: data.dates, y: data.ae, type: 'bar', name: 'TE Tlenowy', yaxis: 'y2', 
+                            marker: {color: 'rgba(52, 152, 219, 0.55)'}, 
+                            hovertemplate: 'TE Tlen: %{y}<extra></extra>' 
+                        };
+                        const traceAn = { 
+                            x: data.dates, y: data.an, type: 'bar', name: 'TE Beztlenowy', yaxis: 'y2', 
+                            marker: {color: 'rgba(255, 0, 51, 0.75)'}, // JASKRAWOCZERWONY
+                            hovertemplate: 'TE Beztlen: %{y}<extra></extra>' 
+                        };
                         endData = [traceAe, traceAn, traceCTL, traceATL];
                     }
 
                     Plotly.newPlot('chart-endurance', endData, { 
-                        title: 'Endurance Score & Training Effect', hovermode: 'x unified', barmode: 'stack', autosize: true,
+                        title: { text: 'Endurance Score & Training Effect', x: 0.01 },
+                        hovermode: 'x unified', barmode: 'stack', autosize: true,
+                        legend: topLegend,
                         yaxis: { title: 'TRIMP' },
                         yaxis2: { title: 'Training Effect', overlaying: 'y', side: 'right', range: [0, 10], showgrid: false },
-                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], margin: { t: 40, b: 40, l: 40, r: 40 }
+                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], 
+                        margin: { t: 60, b: 40, l: 50, r: 50 }
                     }, plotConf);
 
+                    // 2. MMP
                     Plotly.newPlot('chart-mmp', [{
                         x: data.mmp_labels, y: data.mmp_vals, mode: 'lines+markers', name: 'Max Power',
                         line: {color: '#d62728', width: 3, shape: 'spline'}, marker: {size: 10, color: '#1f77b4'}, hovertemplate: 'Czas: %{x}<br>Max Moc: %{y} W<extra></extra>'
-                    }], { title: 'Krzywa Mocy MMP (Top 5)', autosize: true, yaxis: { title: 'Moc (W)' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
+                    }], { 
+                        title: { text: 'Krzywa Mocy MMP (Top 5)', x: 0.02 }, 
+                        autosize: true, yaxis: { title: 'Moc (W)' }, 
+                        margin: { t: 60, b: 40, l: 50, r: 20 } 
+                    }, plotConf);
 
+                    // 3. EF vs HRV
+                    const bandX = []; const bandU = []; const bandL = [];
+                    data.dates.forEach((d, i) => { if (data.hrv_upper[i] !== null) { bandX.push(d); bandU.push(data.hrv_upper[i]); bandL.push(data.hrv_lower[i]); } });
+                    Plotly.newPlot('chart-ef', [
+                        { x: bandX.concat(bandX.slice().reverse()), y: bandU.concat(bandL.slice().reverse()), fill: 'toself', fillcolor: 'rgba(44, 160, 44, 0.15)', line: {color: 'transparent'}, name: 'Norma HRV', yaxis: 'y2', type: 'scatter', hoverinfo: 'skip' },
+                        { x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (7d)', line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2' },
+                        { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 8} }, ...addTrend('ef')
+                    ], { 
+                        title: { text: 'Współczynnik EF vs HRV', x: 0.02 }, 
+                        autosize: true, legend: topLegend,
+                        yaxis: { title: 'EF' }, 
+                        yaxis2: { title: 'HRV (ms)', overlaying: 'y', side: 'right', showgrid: false }, 
+                        hovermode: 'x unified', 
+                        margin: { t: 60, b: 40, l: 50, r: 50 } 
+                    }, plotConf);
+
+                    // 4. BIOMECHANIKA W CZASIE
                     const vBiomech = [];
                     data.dates.forEach((d, i) => { if (data.vo[i] && data.gct[i] && data.pace[i]) vBiomech.push({date: d, pace: data.pace[i], pace_str: data.pace_str[i], vo: data.vo[i], gct: data.gct[i]}); });
                     if (vBiomech.length > 0) {
@@ -190,27 +244,33 @@
                             x: vBiomech.map(v => v.date), y: vBiomech.map(v => v.pace), mode: 'markers', name: 'Biomechanika',
                             text: vBiomech.map(v => `Data: ${v.date}<br>Tempo: ${v.pace_str} min/km<br>VO (rozmiar): ${v.vo.toFixed(1)} cm<br>GCT (kolor): ${v.gct.toFixed(0)} ms`), hovertemplate: '%{text}<extra></extra>',
                             marker: {
-                                size: vBiomech.map(v => v.vo * 2.5), sizemode: 'diameter',
-                                color: vBiomech.map(v => v.gct), colorscale: 'Viridis', showscale: true, colorbar: { title: 'GCT (ms)', thickness: 10 }
+                                size: vBiomech.map(v => v.vo * 2.2), sizemode: 'diameter',
+                                color: vBiomech.map(v => v.gct), colorscale: 'Viridis', showscale: true, 
+                                colorbar: { title: 'GCT', thickness: 12, len: 0.8 }
                             }
                         }], { 
-                            title: 'Biomechanika: Postęp w czasie', autosize: true, xaxis: { title: 'Data' }, yaxis: { title: 'Tempo (szybciej →)', autorange: 'reversed' }, margin: { t: 40, b: 40, l: 40, r: 20 } 
+                            title: { text: 'Biomechanika: Postęp w czasie', x: 0.02 }, 
+                            autosize: true, xaxis: { title: 'Data' }, yaxis: { title: 'Tempo (min/km)', autorange: 'reversed' }, 
+                            margin: { t: 60, b: 40, l: 50, r: 20 } 
                         }, plotConf);
                     } else {
                         document.getElementById('chart-biomech').innerHTML = '<p style="text-align:center; padding-top:150px; color:#999;">Brak danych z dynamiki biegu</p>';
                     }
 
-                    const bandX = []; const bandU = []; const bandL = [];
-                    data.dates.forEach((d, i) => { if (data.hrv_upper[i] !== null) { bandX.push(d); bandU.push(data.hrv_upper[i]); bandL.push(data.hrv_lower[i]); } });
-                    Plotly.newPlot('chart-ef', [
-                        { x: bandX.concat(bandX.slice().reverse()), y: bandU.concat(bandL.slice().reverse()), fill: 'toself', fillcolor: 'rgba(44, 160, 44, 0.15)', line: {color: 'transparent'}, name: 'Norma HRV', yaxis: 'y2', type: 'scatter', hoverinfo: 'skip' },
-                        { x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (7d)', line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2' },
-                        { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 8} }, ...addTrend('ef')
-                    ], { title: 'Współczynnik EF vs HRV', autosize: true, yaxis: { title: 'EF' }, yaxis2: { title: 'HRV (ms)', overlaying: 'y', side: 'right' }, hovermode: 'x unified', margin: { t: 40, b: 40, l: 40, r: 40 } }, plotConf);
+                    // 5. ŚREDNIA MOC
+                    Plotly.newPlot('chart-pow', [{ x: data.dates, y: data.pow, mode: 'markers', name: 'Moc', marker: {color: '#1f77b4', size: 8} }, ...addTrend('pow')], { 
+                        title: { text: 'Średnia Moc (W)', x: 0.02 }, autosize: true, legend: topLegend, margin: { t: 60, b: 40, l: 50, r: 20 } 
+                    }, plotConf);
 
-                    Plotly.newPlot('chart-pow', [{ x: data.dates, y: data.pow, mode: 'markers', name: 'Moc', marker: {color: '#1f77b4', size: 8} }, ...addTrend('pow')], { title: 'Średnia Moc (W)', autosize: true, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
-                    Plotly.newPlot('chart-hr', [{ x: data.dates, y: data.hr, mode: 'markers', name: 'HR', marker: {color: '#2ca02c', size: 8} }, ...addTrend('hr')], { title: 'Średnie Tętno (BPM)', autosize: true, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
-                    Plotly.newPlot('chart-pace', [{ x: data.dates, y: data.pace, mode: 'markers', name: 'Tempo', marker: {color: '#9467bd', size: 8}, text: data.pace_str, hovertemplate: 'Tempo: %{text} min/km<extra></extra>' }, ...addTrend('pace')], { title: 'Średnie Tempo (min/km)', autosize: true, yaxis: { autorange: 'reversed' }, margin: { t: 40, b: 40, l: 40, r: 20 } }, plotConf);
+                    // 6. ŚREDNIE TĘTNO
+                    Plotly.newPlot('chart-hr', [{ x: data.dates, y: data.hr, mode: 'markers', name: 'HR', marker: {color: '#2ca02c', size: 8} }, ...addTrend('hr')], { 
+                        title: { text: 'Średnie Tętno (BPM)', x: 0.02 }, autosize: true, legend: topLegend, margin: { t: 60, b: 40, l: 50, r: 20 } 
+                    }, plotConf);
+
+                    // 7. ŚREDNIE TEMPO
+                    Plotly.newPlot('chart-pace', [{ x: data.dates, y: data.pace, mode: 'markers', name: 'Tempo', marker: {color: '#9467bd', size: 8}, text: data.pace_str, hovertemplate: 'Tempo: %{text} min/km<extra></extra>' }, ...addTrend('pace')], { 
+                        title: { text: 'Średnie Tempo (min/km)', x: 0.02 }, autosize: true, legend: topLegend, yaxis: { autorange: 'reversed' }, margin: { t: 60, b: 40, l: 50, r: 20 } 
+                    }, plotConf);
                 },
                 
                 reset() {
