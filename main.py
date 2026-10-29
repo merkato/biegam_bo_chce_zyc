@@ -153,10 +153,10 @@ async def analyze_garmin(
         daily['pace_str'] = daily['pace_decimal'].apply(format_pace)
 
         hrv_records = []
-        hrv_start_date = pd.to_datetime(start_date) - pd.Timedelta(days=30)
+        hrv_start_date = pd.to_datetime(start_date) - pd.Timedelta(days=45)
         hrv_dates = pd.date_range(start=hrv_start_date, end=end_date)
-        if len(hrv_dates) > 60:
-            hrv_dates = pd.date_range(start=pd.to_datetime(end_date)-pd.Timedelta(days=60), end=end_date)
+        if len(hrv_dates) > 120:
+            hrv_dates = pd.date_range(start=pd.to_datetime(end_date)-pd.Timedelta(days=120), end=end_date)
             
         for d in hrv_dates:
             try:
