@@ -36,6 +36,38 @@
         details.more { margin-top: 20px; }
         details.more > summary { cursor: pointer; font-weight: bold; padding: 10px 0; }
         .note { font-size: 0.8em; color: #7f8c8d; margin-top: 24px; line-height: 1.5; }
+
+        /* --- raport do druku (A4, dwa wykresy na stronę) --- */
+        #report { display: none; }
+        .r-page { background: white; color: #222; font-size: 10.5pt; line-height: 1.4; }
+        .r-head { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 2px solid #1f77b4; padding-bottom: 4mm; margin-bottom: 5mm; }
+        .r-head h1 { font-size: 18pt; margin: 0; }
+        .r-head .meta { font-size: 9pt; color: #666; text-align: right; }
+        .r-head.small { padding-bottom: 2mm; margin-bottom: 4mm; border-bottom-width: 1px; }
+        .r-head.small h1 { font-size: 12pt; }
+        .r-head.small .meta { font-size: 8pt; }
+        .r-summary { background: #f3f7fb; border-left: 4px solid #1f77b4; padding: 3mm 4mm; margin-bottom: 5mm; }
+        .r-summary ul { margin: 1mm 0 0 5mm; padding: 0; }
+        .r-kpis { width: 100%; border-collapse: collapse; font-size: 9.5pt; }
+        .r-kpis th, .r-kpis td { text-align: left; padding: 1.6mm 2mm; border-bottom: 1px solid #e3e6ea; vertical-align: top; }
+        .r-kpis th { color: #666; font-weight: 600; width: 32%; }
+        .r-kpis td.v { font-weight: 700; width: 22%; white-space: nowrap; }
+        .r-chart { margin-bottom: 5mm; }
+        .r-chart img { width: 100%; display: block; border: 1px solid #eee; }
+        .r-chart h2 { font-size: 12pt; margin: 0 0 2mm; }
+        .r-how { font-size: 9pt; color: #333; background: #fafafa; border: 1px solid #eee; border-top: 0; padding: 2mm 3mm; }
+        .r-how b { color: #1f77b4; }
+        .r-how ul { margin: 1mm 0 0 4mm; padding: 0; }
+        .r-foot { font-size: 8.5pt; color: #666; }
+        @media print {
+            @page { size: A4 portrait; margin: 12mm; }
+            body { background: white; padding: 0; }
+            .container > :not(#report) { display: none !important; }
+            #report { display: block !important; }
+            .r-page { break-after: page; page-break-after: always; }
+            .r-page:last-child { break-after: auto; page-break-after: auto; }
+            .r-chart { break-inside: avoid; page-break-inside: avoid; }
+        }
     </style>
 </head>
 <body>
@@ -81,7 +113,11 @@
                 <template x-if="k.hr_max_tanaka"><span> (wiekowe ok. <span x-text="k.hr_max_tanaka"></span>)</span></template>
                 | Zapytań do Garmina: <span x-text="sync.calls"></span>
                 <template x-for="n in (sync.notes || [])"><span style="color:#b36b00;"> ⚠ <span x-text="n"></span></span></template></span>
-            <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold; font-size: 0.9em;">[ Wyloguj / Zamknij ]</a>
+            <span style="display: flex; gap: 14px; align-items: center;">
+                <a href="#" @click.prevent="printReport()" style="color: #1f77b4; text-decoration: none; font-weight: bold; font-size: 0.9em;"
+                   x-text="reportBusy ? '⏳ Przygotowuję raport…' : '📄 Raport PDF'"></a>
+                <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold; font-size: 0.9em;">[ Wyloguj / Zamknij ]</a>
+            </span>
         </div>
 
         <!-- KAFELKI -->
@@ -188,11 +224,14 @@
             odcinków równego biegu z pierwszych ~30 min po rozgrzewce, bez marszu i postojów (dalsza część biegu to już zmęczenie –
             pokazuje je wykres dryfu). Tak samo liczone jest tempo przy tętnie. Szczegóły biegów dociągane stopniowo; do tego czasu ze średniej biegu (puste kropki).
             HR max: najwyższe tętno potwierdzone przez co najmniej 3 biegi z ostatniego roku – pojedyncze skoki czujnika nie liczą się.
-            mediana z 6 tygodni, czasy z tablic VDOT. Zakładają start na maksymalny wysiłek – przy ograniczeniach kardiologicznych
+            VDOT to mediana z 6 tygodni, czasy z tablic Danielsa. Prognozy zakładają start na maksymalny wysiłek – przy ograniczeniach kardiologicznych
             traktuj je jako miarę formy, nie cel do pobiegnięcia. Beta-blokery zaniżają tętno i zawyżają szacunki oparte na HR.
             Cel BMI: WHO 18,5–24,9; dla 65+ przyjęto 23–27. To nie jest porada medyczna.
         </p>
     </div>
+
+    <!-- Raport: wypełniany przez printReport(), widoczny tylko w druku -->
+    <div id="report"></div>
 </div>
 
 <script>
@@ -217,7 +256,7 @@ document.addEventListener('alpine:init', () => {
     Alpine.data('dashboard', () => ({
         email: saved.email || '', password: '', startDate: formatDate(pastDate), endDate: formatDate(today),
         hrRest: saved.hrRest || '', hrMax: saved.hrMax || '', hrCap: saved.hrCap || '', waistCm: saved.waistCm || '',
-        loading: false, dataLoaded: false, error: '', debug: {}, sync: {}, k: {}, data: null, extraDrawn: false,
+        loading: false, dataLoaded: false, error: '', debug: {}, sync: {}, k: {}, data: null, extraDrawn: false, reportBusy: false,
 
         sign(v) { return v == null ? '—' : (v > 0 ? '+' : '') + v; },
         tsbText() {
@@ -499,6 +538,143 @@ document.addEventListener('alpine:init', () => {
                     marker: { size: vB.map(v => v.vo * 2.0), sizemode: 'diameter', color: vB.map(v => v.gct), colorscale: 'Viridis', showscale: true, colorbar: { title: 'GCT', thickness: 10, len: 0.85, x: 1.02 } }
                 }], { title: { text: 'Biomechanika w czasie', x: 0 }, xaxis: { title: 'Data' }, yaxis: { title: 'Tempo (min/km)', autorange: 'reversed' }, margin: { t: 60, b: 40, l: 45, r: 50 } });
             } else this.empty('chart-biomech', 'Brak danych z dynamiki biegu');
+        },
+
+        // ---------------------------------------------------------------
+        // RAPORT PDF: strona 1 = podsumowanie i KPI, dalej po dwa wykresy
+        // na stronę A4 z opisem „Jak czytać”, na końcu metodologia.
+        // Druk przeglądarki -> „Zapisz jako PDF”.
+        // ---------------------------------------------------------------
+        async printReport() {
+            if (this.reportBusy || !this.data) return;
+            this.reportBusy = true;
+            try {
+                await this.buildReport();
+                window.print();
+            } catch (e) {
+                alert('Nie udało się przygotować raportu: ' + e.message);
+            } finally {
+                this.reportBusy = false;
+            }
+        },
+
+        reportCharts() {
+            const k = this.k, F = (this.data && this.data.fitness) || {};
+            const list = [
+                { id: 'chart-pred', title: 'Prognoza 10 km i półmaratonu', how: [
+                    'Linia ciągła – prognoza własna z VDOT (mediana 6 tygodni), kropkowana – prognoza Garmina.',
+                    'Oś czasu jest odwrócona: <b>wyżej = szybciej</b>.',
+                    'Prognozy zakładają start na maksymalny wysiłek – przy ograniczeniach kardiologicznych to miara formy, nie cel.'] },
+                { id: 'chart-vo2', title: 'VO₂max: własny VDOT vs Garmin', how: [
+                    'Kropki – szacunek z pojedynczego biegu: <b>pełne</b> z równych odcinków (pierwsze ~30 min po rozgrzewce), <b>puste</b> ze średniej całego biegu.',
+                    'Niebieska linia – VDOT, mediana z 6 tygodni; pomarańczowa – VO₂max Garmina.',
+                    'Różnica do Garmina to głównie ekonomia biegu (Garmin szacuje „silnik”, VDOT – co z niego wychodzi w tempie). <b>Liczy się trend.</b>'] },
+                { id: 'chart-pace-ref', title: `Tempo przy ${F.hr_ref || ''} bpm`, how: [
+                    'Jak szybko biegasz przy stałym tętnie – najprostsza miara wydolności tlenowej.',
+                    '<b>Wyżej = szybciej przy tym samym wysiłku serca</b> (oś odwrócona). Linia – trend z 2 tygodni.',
+                    'Liczone z równych odcinków pierwszych ~30 min po rozgrzewce (puste kropki: średnia z biegu).'] },
+                { id: 'chart-dec', title: 'Dryf tętna na długich biegach (Pa:HR)', how: [
+                    'O ile w drugiej połowie biegu (≥40 min, bez rozgrzewki i marszu) spada stosunek tempa do tętna.',
+                    '<b>&lt; 5%</b> – baza tlenowa wystarcza na taki czas, można wydłużać; <b>5–10%</b> – baza do budowy; <b>&gt; 10%</b> – za długo/za mocno na obecną formę (albo upał, odwodnienie, zmęczenie mięśni).',
+                    'Wartości ujemne: druga połowa łatwiejsza (np. z górki, wolniejszy start).'] },
+                { id: 'chart-endurance', title: 'Obciążenie i forma (CTL / ATL / TSB)', how: [
+                    '<b>CTL</b> – baza (średnie obciążenie ~42 dni), <b>ATL</b> – zmęczenie (~7 dni), <b>TSB</b> = wczorajsze CTL − ATL, czyli forma.',
+                    'TSB: &lt; −25 duże zmęczenie, −25…−10 budowanie formy, −10…5 neutralnie, &gt; 5 świeżość. Słupki – Training Effect z zegarka.',
+                    'Przyrost CTL powyżej ~5 na tydzień zwiększa ryzyko przeciążenia. Za kreską „dziś” – spadek przy braku treningów.'] },
+                { id: 'chart-ef', title: 'Efektywność (EF) vs HRV', how: [
+                    '<b>EF</b> – moc biegowa na uderzenie serca (wyżej = lepiej). <b>HRV</b> – zmienność rytmu serca w nocy, średnia 7 dni.',
+                    'Zielony pas – norma HRV z 30 dni. HRV w pasie = regeneracja w normie; kilka dni <b>poniżej pasa</b> = stres, zmęczenie, choroba.'] },
+                { id: 'chart-rhr', title: 'Tętno spoczynkowe', how: [
+                    'Kropki – pomiar dzienny, czerwona linia – średnia 7 dni, przerywana – norma z 60 dni.',
+                    '<b>Długi spadek</b> = poprawa wydolności. <b>Wzrost o 5+ uderzeń przez kilka dni</b> = sygnał choroby lub przemęczenia – odpuść intensywność.'] },
+                { id: 'chart-weight', title: 'Waga i cel', how: [
+                    'Kropki – ważenia, linia – trend wygładzony (dzienne wahania wody to szum).',
+                    'Zielony pas – waga odpowiadająca prawidłowemu BMI dla wieku (WHO 18,5–24,9; dla 65+ przyjęto 23–27).',
+                    'Bezpieczne tempo zmiany: ok. 0,5–1% masy ciała na tydzień; przy chudnięciu pilnuj masy mięśniowej.'] },
+            ];
+            if (k.hr_cap) list.push({ id: 'chart-cap', title: `Tętno na biegach vs limit ${k.hr_cap.cap}`, how: [
+                'Każdy bieg: kolorowa kropka – maksymalne tętno, szara – średnie. Przerywana linia – limit od lekarza.',
+                '<b>Czerwone</b> – bieg, w którym tętno przekroczyło limit. Pojedyncze skoki mogą być błędem czujnika nadgarstkowego.'] });
+            return list.filter(c => { const el = document.getElementById(c.id); return el && el.data; });
+        },
+
+        reportSummary() {
+            const k = this.k, out = [];
+            const s = (v) => this.sign(v);
+            if (k.vdot != null) out.push(`Forma: VDOT <b>${k.vdot}</b>${k.vdot_delta_28d != null ? ` (${s(k.vdot_delta_28d)} w 4 tyg.)` : ''}; prognoza 10 km <b>${k.own_10k || '—'}</b>, półmaraton <b>${k.own_hm || '—'}</b> (Garmin: ${k.garmin_10k || '—'} / ${k.garmin_hm || '—'}).`);
+            if (k.pace_ref) out.push(`Wydolność tlenowa: <b>${k.pace_ref} min/km</b> przy ${k.hr_ref} bpm${k.pace_ref_delta_s_28d ? ` – ${k.pace_ref_delta_s_28d < 0 ? 'szybciej' : 'wolniej'} o ${Math.abs(k.pace_ref_delta_s_28d)} s/km niż 4 tyg. temu` : ''}.`);
+            if (k.decoupling != null) out.push(`Dryf tętna na długich biegach: <b>${k.decoupling}%</b> – ${k.decoupling < 5 ? 'solidna baza' : (k.decoupling <= 10 ? 'baza do budowy' : 'biegi za długie lub za mocne na obecną formę')}.`);
+            if (k.ctl != null) out.push(`Obciążenie: CTL <b>${k.ctl}</b>, forma (TSB) <b>${s(k.tsb)}</b> – ${this.tsbText()}${k.ramp > 5 ? '; <b>przyrost obciążenia za szybki</b>' : ''}.`);
+            if (k.rhr_7d != null) out.push(`Tętno spoczynkowe: <b>${k.rhr_7d}</b> (norma 60 dni: ${k.rhr_60d ?? '—'})${k.rhr_alert ? ` – <b>ostatnie 3 dni ${k.rhr_3d}, o 5+ powyżej normy</b>` : ''}.`);
+            if (k.weight != null) out.push(`Waga: <b>${k.weight} kg</b> (${s(k.weight_rate)} kg/tydz.)${k.bmi ? `, BMI <b>${k.bmi}</b> (cel ${k.bmi_band.join('–')})` : ''}${k.target_kg ? `; do celu ${k.target_kg} kg${k.target_eta_weeks ? `, ok. ${k.target_eta_weeks} tyg.` : ''}` : ''}${k.weight_rate < 0 && k.muscle_rate < 0 ? '; <b>spada też masa mięśniowa</b>' : ''}.`);
+            if (k.waist) out.push(`Obwód talii: <b>${k.waist.waist_cm} cm</b> – ryzyko ${k.waist.risk}${k.waist.whtr ? `, talia/wzrost ${k.waist.whtr}` : ''}.`);
+            if (k.hr_cap) out.push(`Limit tętna ${k.hr_cap.cap}: przekroczony w <b>${k.hr_cap.over} z ${k.hr_cap.runs}</b> biegów${k.hr_cap.last_over ? ` (ostatnio ${k.hr_cap.last_over})` : ''}.`);
+            return out.map(t => t.replace(/\.\.$/, '.'));
+        },
+
+        reportKpiRows() {
+            const k = this.k, s = (v) => this.sign(v), rows = [];
+            const add = (label, value, note) => { if (value != null && value !== '' && !String(value).startsWith('null')) rows.push([label, value, note || '']); };
+            add('Prognoza 10 km', k.own_10k, `${k.pace_10k ? k.pace_10k + ' min/km · ' : ''}Garmin: ${k.garmin_10k || '—'}`);
+            add('Prognoza półmaratonu', k.own_hm, `${k.pace_hm ? k.pace_hm + ' min/km · ' : ''}Garmin: ${k.garmin_hm || '—'}`);
+            add('VDOT (własny)', k.vdot, `${k.vdot_delta_28d != null ? s(k.vdot_delta_28d) + ' w 4 tyg. · ' : ''}VO₂max Garmin: ${k.vo2_garmin ?? '—'}`);
+            add(`Tempo przy ${k.hr_ref} bpm`, k.pace_ref ? k.pace_ref + ' min/km' : null, k.pace_ref_delta_s_28d != null ? `${s(k.pace_ref_delta_s_28d)} s/km w 4 tyg. (ujemne = szybciej)` : '');
+            add('Dryf tętna (Pa:HR)', k.decoupling != null ? k.decoupling + '%' : null, `mediana z ${k.decoupling_n || 0} ost. biegów ≥40 min`);
+            add('CTL / TSB', k.ctl != null ? `${k.ctl} / ${s(k.tsb)}` : null, `${this.tsbText()}; przyrost CTL ${s(k.ramp)}/tydz.`);
+            add('Tętno spoczynkowe', k.rhr_7d, `norma 60 dni: ${k.rhr_60d ?? '—'}${k.rhr_alert ? ' · ⚠ podwyższone ostatnie dni' : ''}`);
+            add('HR spoczynkowe / max', `${this.debug.hr_rest} / ${this.debug.hr_max}`, k.hr_max_tanaka ? `HR max wiekowe ok. ${k.hr_max_tanaka}` : '');
+            add('Waga', k.weight != null ? k.weight + ' kg' : null, `${s(k.weight_rate)} kg/tydz.${k.body_fat ? ' · tkanka tłuszczowa ' + k.body_fat + '%' : ''}`);
+            add('BMI', k.bmi, k.bmi_note || '');
+            if (k.waist) add('Obwód talii', k.waist.waist_cm + ' cm', `ryzyko ${k.waist.risk}${k.waist.whtr ? ' · talia/wzrost ' + k.waist.whtr : ''}`);
+            if (k.hr_cap) add(`Limit tętna ${k.hr_cap.cap}`, `${k.hr_cap.over} / ${k.hr_cap.runs}`, `biegów ponad limit · najwyższe tętno ${k.hr_cap.max_seen ?? '—'}`);
+            return rows;
+        },
+
+        async chartImage(id) {
+            const el = document.getElementById(id);
+            // tytuł jest w nagłówku raportu, więc obraz bez tytułu; 900 px x2 = ostre i czytelne na A4
+            // 900x370: dwa wykresy z opisem mieszczą się na A4 z zapasem także przy dłuższym opisie
+            const layout = { ...el.layout, title: { text: '' }, width: 900, height: 370,
+                             margin: { ...el.layout.margin, t: el.querySelector('.legend') ? 40 : 15 } };
+            return Plotly.toImage({ data: el.data, layout }, { format: 'png', width: 900, height: 370, scale: 2 });
+        },
+
+        async buildReport() {
+            const esc = (t) => String(t).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+            const now = new Date().toLocaleString('pl-PL', { dateStyle: 'long', timeStyle: 'short' });
+            const head = (sub) => `<div class="r-head${sub ? ' small' : ''}"><h1>🏃 Biegam – raport${sub ? ' · ' + sub : ''}</h1>
+                <div class="meta">Zakres: ${esc(this.startDate)} – ${esc(this.endDate)}<br>Wygenerowano: ${esc(now)}</div></div>`;
+
+            const charts = this.reportCharts();
+            const images = [];
+            for (const c of charts) images.push(await this.chartImage(c.id));
+
+            const pages = [];
+            pages.push(`<section class="r-page">${head()}
+                <div class="r-summary"><b>Podsumowanie</b><ul>${this.reportSummary().map(t => `<li>${t}</li>`).join('')}</ul></div>
+                <table class="r-kpis">${this.reportKpiRows().map(([l, v, n]) => `<tr><th>${esc(l)}</th><td class="v">${esc(v)}</td><td>${esc(n)}</td></tr>`).join('')}</table>
+            </section>`);
+
+            for (let i = 0; i < charts.length; i += 2) {
+                const block = (c, img) => `<div class="r-chart"><h2>${esc(c.title)}</h2><img src="${img}" alt="${esc(c.title)}">
+                    <div class="r-how"><b>Jak czytać:</b><ul>${c.how.map(t => `<li>${t}</li>`).join('')}</ul></div></div>`;
+                pages.push(`<section class="r-page">${head(`strona ${i / 2 + 2}`)}${block(charts[i], images[i])}${charts[i + 1] ? block(charts[i + 1], images[i + 1]) : ''}</section>`);
+            }
+
+            pages.push(`<section class="r-page">${head('metodologia')}<div class="r-foot">
+                <p><b>Skąd dane:</b> Garmin Connect (aktywności, szczegóły biegów, HRV, tętno spoczynkowe, waga, prognozy Garmina). Obliczenia lokalnie, bez udziału Garmina.</p>
+                <p><b>VDOT i prognozy:</b> koszt tlenowy tempa wg Danielsa i Gilberta, ułamek wysiłku z rezerwy tętna (Swain), liczone z 5-minutowych odcinków równego biegu z pierwszych ~30 min po rozgrzewce; mediana z 6 tygodni; czasy z tablic VDOT.</p>
+                <p><b>Obciążenie:</b> TRIMP Banistera; CTL/ATL ze stałymi czasowymi 42 i 7 dni; TSB = wczorajsze CTL − ATL.</p>
+                <p><b>Dryf tętna:</b> stosunek prędkości do tętna w pierwszej i drugiej połowie biegu ≥40 min, po 10 min rozgrzewki, bez marszu i postojów.</p>
+                <p><b>HR max:</b> najwyższe tętno potwierdzone przez co najmniej 3 biegi z ostatniego roku (±3 bpm). <b>HR spoczynkowe:</b> mediana z 30 dni.</p>
+                <p><b>Zdrowie:</b> BMI wg WHO (18,5–24,9; dla 65+ przyjęto 23–27 – przedział najniższego ryzyka w badaniach osób starszych), obwód talii wg IDF/WHO (M: 94/102 cm, K: 80/88 cm), stosunek talii do wzrostu &lt; 0,5.</p>
+                <p><b>Ograniczenia:</b> wskaźniki oparte na tętnie zakładają pomiar z zegarka (możliwe skoki czujnika) i brak leków zmieniających tętno (np. beta-blokery zaniżają HR i zawyżają szacunki). Prognozy zakładają bieg na maksymalny wysiłek.</p>
+                <p><b>To nie jest porada medyczna.</b> Limity wysiłku, szczególnie przy chorobach serca, ustala lekarz.</p>
+            </div></section>`);
+
+            const report = document.getElementById('report');
+            report.innerHTML = pages.join('');
+            await Promise.all([...report.querySelectorAll('img')].map(img => img.decode().catch(() => {})));
         },
 
         reset() {
