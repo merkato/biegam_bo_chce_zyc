@@ -85,12 +85,14 @@
         </div>
 
         <div class="card" x-show="loading" style="text-align: center; max-width: 800px; margin: 0 auto;" x-cloak>
-            <p>🔄 Pobieranie danych, HRV, dynamiki biegu i strumieni mocy... Proszę czekać.</p>
+            <p>🔄 Pobieranie danych... Pierwsza analiza dłuższego zakresu może potrwać około minuty, kolejne idą z lokalnej bazy.</p>
         </div>
         
         <div x-show="dataLoaded" x-cloak>
             <div class="card" style="background: #e6f2ff; border-left: 4px solid #1f77b4; padding: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.9em;"><strong>Fizjologia:</strong> HR Rest <span x-text="debug.hr_rest"></span> | HR Max <span x-text="debug.hr_max"></span></span>
+                <span style="font-size: 0.9em;"><strong>Fizjologia:</strong> HR Rest <span x-text="debug.hr_rest"></span> | HR Max <span x-text="debug.hr_max"></span>
+                    | Zapytań do Garmina: <span x-text="sync.calls"></span>
+                    <template x-for="n in (sync.notes || [])"><span style="color:#b36b00;"> ⚠ <span x-text="n"></span></span></template></span>
                 <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold; font-size: 0.9em;">[ Wyloguj / Zamknij ]</a>
             </div>
 
@@ -121,7 +123,7 @@
 
             Alpine.data('dashboard', () => ({
                 email: '', password: '', startDate: formatDate(pastDate), endDate: formatDate(today),
-                hrRest: '', hrMax: '', loading: false, dataLoaded: false, error: '', debug: {},
+                hrRest: '', hrMax: '', loading: false, dataLoaded: false, error: '', debug: {}, sync: {},
                 
                 async fetchData() {
                     this.loading = true; this.error = '';
@@ -144,6 +146,7 @@
                         }
                         const data = await response.json();
                         this.debug = data.debug;
+                        this.sync = data.sync || {};
                         this.loading = false;
                         this.dataLoaded = true;
                         
