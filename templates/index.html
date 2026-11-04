@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <title>Garmin Trends Analyzer</title>
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
         body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; }
@@ -288,18 +288,22 @@
                         title: { text: 'Średnie Tempo (min/km)', x: 0 }, legend: topLegend, yaxis: { autorange: 'reversed' }, margin: { t: 75, b: 40, l: 45, r: 15 } 
                     });
 
-                    // Nasłuchiwanie na zmianę rozmiaru okna przeglądarki (np. przy przekręcaniu ekranu lub zmniejszaniu okna)
-                    window.addEventListener('resize', () => {
-                        ['chart-heatmap', 'chart-endurance', 'chart-mmp', 'chart-biomech', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => {
-                            const el = document.getElementById(id);
-                            if (el && el.data) {
-                                Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
-                            }
-                        });
-                    });
+                    // Jeden listener na cały cykl życia strony (wcześniej każde rysowanie dokładało kolejny)
+                    if (!this._onResize) {
+                        this._onResize = () => {
+                            ['chart-heatmap', 'chart-endurance', 'chart-mmp', 'chart-biomech', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => {
+                                const el = document.getElementById(id);
+                                if (el && el.data) {
+                                    Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
+                                }
+                            });
+                        };
+                        window.addEventListener('resize', this._onResize);
+                    }
                 },
-                
+
                 reset() {
+                    if (this._onResize) { window.removeEventListener('resize', this._onResize); this._onResize = null; }
                     this.dataLoaded = false;
                     ['chart-heatmap', 'chart-endurance', 'chart-mmp', 'chart-biomech', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => Plotly.purge(id));
                 }

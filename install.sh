@@ -25,14 +25,16 @@ python3 -m venv venv
 echo "📚 Instalowanie zależności z użyciem pip..."
 ./venv/bin/pip install --upgrade pip
 
-# Jeśli masz plik requirements.txt w repozytorium, skrypt go użyje.
-# Jeśli nie, zainstaluje pakiety z listy "z palca".
-if [ -f "requirements.txt" ]; then
-    echo "Znaleziono plik requirements.txt. Instaluję..."
-    ./venv/bin/pip install -r requirements.txt
-else
-    echo "Brak pliku requirements.txt. Instaluję standardowy pakiet..."
-    ./venv/bin/pip install fastapi uvicorn pandas garminconnect jinja2 python-multipart gunicorn
+./venv/bin/pip install -r requirements.txt
+
+echo "👤 Tworzenie użytkownika systemowego 'garmin' (bez powłoki i hasła)..."
+APP_USER=garmin
+id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$APP_USER"
+chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
+if ! runuser -u "$APP_USER" -- test -r "$APP_DIR/main.py"; then
+  echo "❌ Użytkownik '$APP_USER' nie ma dostępu do $APP_DIR (np. katalog w /root)."
+  echo "   Przenieś repozytorium np. do /opt/biegam i uruchom skrypt ponownie."
+  exit 1
 fi
 
 echo "⚙️ Tworzenie konfiguracji systemd (garmin.service)..."
@@ -45,10 +47,16 @@ Description=Garmin Trends Analyzer
 After=network.target
 
 [Service]
-User=root
+User=$APP_USER
+Group=$APP_USER
 WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/venv/bin/gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind [::]]:8000
+ExecStart=$APP_DIR/venv/bin/gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind [::]:8000 --timeout 180 --access-logfile -
 Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=$APP_DIR
 
 [Install]
 WantedBy=multi-user.target
