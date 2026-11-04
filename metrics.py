@@ -203,10 +203,14 @@ STEADY_BLOCK_S = 5 * 60   # blok ciągłego biegu
 STEADY_SPEED_CV = 0.10    # maks. zmienność tempa w bloku (interwały, podbiegi odpadają)
 STEADY_HR_SHIFT = 6       # maks. zmiana HR (bpm) między 1. a ostatnią minutą bloku
 STEADY_MIN_BLOCKS = 2     # co najmniej 10 min równego biegu
+# Forma (VDOT, tempo przy HR) tylko z bloków zaczynających się przed tą chwilą
+# biegu: 10 min rozgrzewki + 30 min. Dalej zmęczenie (dryf) zaniżałoby wynik –
+# to pokazuje osobno wskaźnik dryfu tętna.
+FORM_WINDOW_END_S = DECOUPLING_WARMUP_S + 30 * 60
 
 
-def steady_blocks(details: dict) -> list[tuple[float, float]]:
-    """Równe odcinki biegu: [(średnia prędkość m/s, średnie HR)] dla 5-min bloków.
+def steady_blocks(details: dict) -> list[tuple[float, float, int]]:
+    """Równe odcinki biegu: [(średnia prędkość m/s, średnie HR, start bloku w s)] dla 5-min bloków.
 
     Pomija rozgrzewkę, marsz i postoje; blok musi mieć stałe tempo i
     ustabilizowane tętno. Nie zależy od HR spoczynkowego/max, więc wynik
@@ -231,26 +235,47 @@ def steady_blocks(details: dict) -> list[tuple[float, float]]:
                 continue
             if abs(hr[-60:].mean() - hr[:60].mean()) > STEADY_HR_SHIFT:
                 continue
-            out.append((round(float(sp.mean()), 4), round(float(hr.mean()), 2)))
+            out.append((round(float(sp.mean()), 4), round(float(hr.mean()), 2), int(run.index.values[sl[0]])))
     return out
 
 
-def vo2max_from_blocks(blocks, hr_rest: float, hr_max: float) -> tuple[float, int] | None:
-    """Mediana szacunków VO2max z równych bloków; None przy < STEADY_MIN_BLOCKS."""
-    ests = [e for e in (vo2max_from_run(sp, hr, hr_rest, hr_max) for sp, hr in blocks or []) if e == e]
+def form_blocks(blocks, until_s: int | None = FORM_WINDOW_END_S) -> list[tuple[float, float]]:
+    """Bloki do oceny formy: tylko te zaczynające się przed `until_s` (None = wszystkie)."""
+    out = []
+    for b in blocks or []:
+        if until_s is None or len(b) < 3 or b[2] < until_s:
+            out.append((b[0], b[1]))
+    return out
+
+
+def vo2max_from_blocks(blocks, hr_rest: float, hr_max: float, until_s: int | None = FORM_WINDOW_END_S) -> tuple[float, int] | None:
+    """Mediana szacunków VO2max z równych bloków (z okna formy); None przy < STEADY_MIN_BLOCKS."""
+    ests = [e for e in (vo2max_from_run(sp, hr, hr_rest, hr_max) for sp, hr in form_blocks(blocks, until_s)) if e == e]
     if len(ests) < STEADY_MIN_BLOCKS:
         return None
     return float(np.median(ests)), len(ests)
 
 
-def steady_vo2max(details: dict, hr_rest: float, hr_max: float) -> tuple[float, int] | None:
+def speed_at_hr_from_blocks(blocks, hr_rest: float, hr_max: float, hr_ref: float,
+                            until_s: int | None = FORM_WINDOW_END_S) -> float | None:
+    """Prędkość (m/s) przy tętnie odniesienia – mediana z równych bloków okna formy."""
+    vals = []
+    for sp, hr in form_blocks(blocks, until_s):
+        if 0.4 <= hrr_fraction(hr, hr_rest, hr_max) <= 0.97:
+            v = speed_at_hr(sp, hr, hr_rest, hr_ref)
+            if v == v:
+                vals.append(v)
+    return float(np.median(vals)) if len(vals) >= STEADY_MIN_BLOCKS else None
+
+
+def steady_vo2max(details: dict, hr_rest: float, hr_max: float, until_s: int | None = FORM_WINDOW_END_S) -> tuple[float, int] | None:
     """Szacunek VO2max tylko z równych, biegowych odcinków jednego biegu."""
-    return vo2max_from_blocks(steady_blocks(details), hr_rest, hr_max)
+    return vo2max_from_blocks(steady_blocks(details), hr_rest, hr_max, until_s)
 
 
 # --- wyniki z jednego biegu, liczone raz i zapisywane w bazie ---------------
 
-DERIVED_VERSION = 1   # podbij po zmianie wzorów – wyniki przeliczą się same
+DERIVED_VERSION = 2   # podbij po zmianie wzorów – wyniki przeliczą się same (v2: czas bloku)
 MMP_WINDOWS = (10, 30, 60, 300, 1200, 3600)
 
 

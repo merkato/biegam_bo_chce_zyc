@@ -18,6 +18,7 @@
         @media (min-width: 850px) { .charts-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
         @media (min-width: 1400px) { .charts-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
         .plot-container { width: 100%; height: 380px; }
+        @media (max-width: 600px) { .plot-container { height: 460px; } }
         input, button { padding: 10px; width: 100%; box-sizing: border-box; margin-top: 5px; }
         button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px; }
         label { font-size: 0.9em; color: #555; }
@@ -184,7 +185,8 @@
 
         <p class="note">
             Prognozy własne: VO₂max szacowane z biegów ≥20 min (koszt tlenowy tempa wg Danielsa / %HRR) – z 5-minutowych
-            odcinków równego biegu, bez rozgrzewki, marszu i postojów (szczegóły biegów dociągane stopniowo; do tego czasu ze średniej biegu).
+            odcinków równego biegu z pierwszych ~30 min po rozgrzewce, bez marszu i postojów (dalsza część biegu to już zmęczenie –
+            pokazuje je wykres dryfu). Tak samo liczone jest tempo przy tętnie. Szczegóły biegów dociągane stopniowo; do tego czasu ze średniej biegu (puste kropki).
             HR max: najwyższe tętno potwierdzone przez co najmniej 3 biegi z ostatniego roku – pojedyncze skoki czujnika nie liczą się.
             mediana z 6 tygodni, czasy z tablic VDOT. Zakładają start na maksymalny wysiłek – przy ograniczeniach kardiologicznych
             traktuj je jako miarę formy, nie cel do pobiegnięcia. Beta-blokery zaniżają tętno i zawyżają szacunki oparte na HR.
@@ -274,7 +276,21 @@ document.addEventListener('alpine:init', () => {
             if (!el || !el.clientWidth) return;
             layout.width = el.clientWidth;
             layout.height = el.clientHeight;
-            Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false });
+            if (layout.title) layout.title = { yref: 'container', y: 1, yanchor: 'top', pad: { t: 14 }, ...layout.title };
+            Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false }).then(() => this.fitLegend(el));
+        },
+
+        // Legenda u góry rośnie w górę, gdy zawija się w kilka wierszy – wtedy
+        // zwiększamy górny margines o tyle, ile nachodzi na tytuł.
+        fitLegend(el) {
+            const t = el.querySelector('.gtitle'), l = el.querySelector('.legend');
+            if (!t || !l) return;
+            const tb = t.getBoundingClientRect(), lb = l.getBoundingClientRect(), top = el.getBoundingClientRect().top;
+            if (lb.top >= tb.bottom + 4) return;
+            // margines = tytuł + legenda (leży tuż nad wykresem, y=1.02) + odstęp
+            const plotH = el.layout.height - el.layout.margin.t - el.layout.margin.b;
+            const need = Math.ceil(tb.bottom - top + 6 + lb.height + 0.02 * plotH + 4);
+            if (need > el.layout.margin.t) Plotly.relayout(el, { 'margin.t': need });
         },
 
         empty(id, text) {
@@ -340,27 +356,28 @@ document.addEventListener('alpine:init', () => {
                 });
             } else this.empty('chart-pred', 'Za mało równych biegów ≥20 min z tętnem');
 
-            // VO2max
-            const pick = (src) => {
+            // VO2max – pełne kropki: równe odcinki (pierwsze ~30 min po rozgrzewce), puste: średnia z biegu
+            const pick = (vals, srcs, src) => {
                 const x = [], y = [];
-                F.run_dates.forEach((d, i) => { if (F.vdot_src[i] === src) { x.push(d); y.push(F.vdot_run[i]); } });
+                F.run_dates.forEach((d, i) => { if (srcs[i] === src && vals[i] != null) { x.push(d); y.push(vals[i]); } });
                 return { x, y };
             };
-            const seg = pick('seg'), avg = pick('avg');
             const vo2Tr = [
-                { ...seg, mode: 'markers', name: 'Bieg: równe odcinki', marker: {color: 'rgba(31,119,180,0.55)', size: 7} },
-                { ...avg, mode: 'markers', name: 'Bieg: średnia (bez szczegółów)', marker: {color: 'rgba(31,119,180,0.5)', size: 6, symbol: 'circle-open'} },
-                { x: F.trend_dates, y: F.vdot_trend, mode: 'lines', name: 'VDOT (mediana 6 tyg.)', line: {color: '#1f77b4', width: 3} },
+                { ...pick(F.vdot_run, F.vdot_src, 'seg'), mode: 'markers', name: 'Bieg', marker: {color: 'rgba(31,119,180,0.55)', size: 7} },
+                { ...pick(F.vdot_run, F.vdot_src, 'avg'), mode: 'markers', name: 'Bieg (średnia)', marker: {color: 'rgba(31,119,180,0.5)', size: 6, symbol: 'circle-open'} },
+                { x: F.trend_dates, y: F.vdot_trend, mode: 'lines', name: 'VDOT 6 tyg.', line: {color: '#1f77b4', width: 3} },
             ];
             if (F.vo2_garmin_run && F.vo2_garmin_run.some(v => v))
-                vo2Tr.push({ x: F.run_dates, y: F.vo2_garmin_run, mode: 'lines', line: {shape: 'hv', color: '#ff7f0e', width: 2}, name: 'VO₂max Garmin', connectgaps: true });
+                vo2Tr.push({ x: F.run_dates, y: F.vo2_garmin_run, mode: 'lines', line: {shape: 'hv', color: '#ff7f0e', width: 2}, name: 'Garmin', connectgaps: true });
             this.renderPlot('chart-vo2', vo2Tr, { title: { text: 'VO₂max: własny VDOT vs Garmin', x: 0 }, legend: topLegend, yaxis: { title: 'ml/kg/min' }, margin: { t: 75, b: 40, l: 45, r: 15 } });
 
-            // TEMPO PRZY HR
+            // TEMPO PRZY HR – te same zasady co VDOT
             const paceTxt = (arr) => arr.map(v => v ? fmtMin(v) : '');
+            const pSeg = pick(F.pace_ref_run, F.ref_src, 'seg'), pAvg = pick(F.pace_ref_run, F.ref_src, 'avg');
             this.renderPlot('chart-pace-ref', [
-                { x: F.run_dates, y: F.pace_ref_run, mode: 'markers', name: 'Bieg', marker: {color: 'rgba(148,103,189,0.4)', size: 7}, customdata: paceTxt(F.pace_ref_run), hovertemplate: '%{x}: %{customdata} min/km<extra></extra>' },
-                { x: F.ref_dates, y: F.pace_ref_trend, mode: 'lines', name: 'Trend (2 tyg.)', line: {color: '#9467bd', width: 3}, customdata: paceTxt(F.pace_ref_trend), hovertemplate: 'Trend: %{customdata} min/km<extra></extra>' },
+                { ...pSeg, mode: 'markers', name: 'Bieg', marker: {color: 'rgba(148,103,189,0.5)', size: 7}, customdata: paceTxt(pSeg.y), hovertemplate: '%{x}: %{customdata} min/km<extra></extra>' },
+                { ...pAvg, mode: 'markers', name: 'Bieg (średnia)', marker: {color: 'rgba(148,103,189,0.5)', size: 6, symbol: 'circle-open'}, customdata: paceTxt(pAvg.y), hovertemplate: '%{x}: %{customdata} min/km (średnia)<extra></extra>' },
+                { x: F.ref_dates, y: F.pace_ref_trend, mode: 'lines', name: 'Trend 2 tyg.', line: {color: '#9467bd', width: 3}, customdata: paceTxt(F.pace_ref_trend), hovertemplate: 'Trend: %{customdata} min/km<extra></extra>' },
             ], {
                 title: { text: `Tempo przy ${F.hr_ref} bpm – wydolność tlenowa`, x: 0 }, legend: topLegend,
                 yaxis: { title: 'min/km', autorange: 'reversed', ...this.paceTicks(F.pace_ref_run.concat(F.pace_ref_trend)) }, margin: { t: 75, b: 40, l: 50, r: 15 }
@@ -435,7 +452,7 @@ document.addEventListener('alpine:init', () => {
             if (!this._onResize) {
                 this._onResize = () => CHART_IDS.forEach(id => {
                     const el = document.getElementById(id);
-                    if (el && el.data && el.clientWidth) Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
+                    if (el && el.data && el.clientWidth) Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight }).then(() => this.fitLegend(el));
                 });
                 window.addEventListener('resize', this._onResize);
             }

@@ -154,22 +154,28 @@ def analyze(
                         for s, h, ok in zip(runs['speed'], runs['hr'], steady)]
     runs['vdot_src'] = np.where(runs['vdot_run'].notna(), 'avg', None)
 
-    # Lepszy szacunek z równych odcinków (szczegóły biegu). Pobieramy je stopniowo,
-    # od najnowszych, najwyżej SEG_DETAILS_PER_ANALYSIS nowych na analizę – reszta
-    # biegów do czasu pobrania korzysta ze średniej z całego biegu.
+    hrr = M.hrr_fraction(runs['hr'], hr_rest, hr_max)
+    ok_ref = (runs['dur'] >= 15 * 60) & hrr.between(0.4, 0.97)
+    runs['spd_ref'] = [M.speed_at_hr(s, h, hr_rest, hr_ref) if ok else np.nan
+                       for s, h, ok in zip(runs['speed'], runs['hr'], ok_ref)]
+    runs['ref_src'] = np.where(runs['spd_ref'].notna(), 'avg', None)
+
+    # Lepszy szacunek (VDOT i tempo przy HR) z równych odcinków pierwszych ~30 min po
+    # rozgrzewce. Szczegóły pobieramy stopniowo, od najnowszych, najwyżej
+    # SEG_DETAILS_PER_ANALYSIS nowych na analizę – do tego czasu średnia z całego biegu.
     seg_cand = runs[steady & (runs['date'] >= start_ts - pd.Timedelta(days=42))]
     if 'activityId' in runs:
         seg_cand = seg_cand.dropna(subset=['activityId']).sort_values('startTimeLocal', ascending=False)
         seg_ids = [int(i) for i in seg_cand['activityId']]
         for idx, der in zip(seg_cand.index, get_derived(seg_ids, max_new=SEG_DETAILS_PER_ANALYSIS)):
-            res = M.vo2max_from_blocks(der["blocks"], hr_rest, hr_max) if der else None
+            if not der:
+                continue
+            res = M.vo2max_from_blocks(der["blocks"], hr_rest, hr_max)
             if res:
                 runs.at[idx, 'vdot_run'], runs.at[idx, 'vdot_src'] = res[0], 'seg'
-
-    hrr = M.hrr_fraction(runs['hr'], hr_rest, hr_max)
-    ok_ref = (runs['dur'] >= 15 * 60) & hrr.between(0.4, 0.97)
-    runs['spd_ref'] = [M.speed_at_hr(s, h, hr_rest, hr_ref) if ok else np.nan
-                       for s, h, ok in zip(runs['speed'], runs['hr'], ok_ref)]
+            spd = M.speed_at_hr_from_blocks(der["blocks"], hr_rest, hr_max, hr_ref)
+            if spd:
+                runs.at[idx, 'spd_ref'], runs.at[idx, 'ref_src'] = spd, 'seg'
 
     # --- obciążenie: od pierwszego biegu (rozruch) do +21 dni ---
     runs['sd'] = runs['speed'] * runs['dur']
@@ -267,6 +273,7 @@ def analyze(
         "vdot_src": [v if isinstance(v, str) else None for v in r_view['vdot_src']],
         "vo2_garmin_run": _clean(num(vo2_col)[r_view.index]) if vo2_col else [],
         "pace_ref_run": _clean(1000 / r_view['spd_ref'] / 60),
+        "ref_src": [v if isinstance(v, str) else None for v in r_view['ref_src']],
         "max_hr_run": _clean(pd.to_numeric(r_view[max_hr_col], errors='coerce')) if max_hr_col else [],
         "avg_hr_run": _clean(r_view['hr']),
         "trend_dates": _ds(vdot_trend.index[vdot_trend.index >= start_ts]),

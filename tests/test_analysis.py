@@ -67,6 +67,9 @@ def test_segment_vdot_close_to_truth(analyze):
         k = analyze(days=60).json()["kpi"]
     assert k["vdot_seg"] == k["vdot_runs"]
     assert k["vdot"] == pytest.approx(40.6, abs=1.0)
+    f = analyze(days=60).json()["fitness"]
+    recent = [src for d, src in zip(f["run_dates"], f["ref_src"]) if d >= str(TODAY - timedelta(days=42))]
+    assert recent and all(src == "seg" for src in recent if src)   # tempo przy HR też z odcinków
 
 
 def test_missing_health_data_and_profile(analyze):

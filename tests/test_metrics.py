@@ -146,7 +146,7 @@ def test_formatting():
 
 # --- VDOT z równych odcinków i HR max ---------------------------------------
 
-def _real_run(true_vdot, hr=135, minutes=50, warmup=True, walk=True, intervals=False, rest=48, hmax=176):
+def _real_run(true_vdot, hr=135, minutes=50, warmup=True, walk=True, intervals=False, rest=48, hmax=176, drift=0.0, drift_from_min=0):
     """Bieg jak z zegarka: rozgrzewka, marsz w środku; prędkość dobrana do VDOT."""
     vo2 = 3.5 + (true_vdot - 3.5) * (hr - rest) / (hmax - rest)
     a, b, c = 0.000104, 0.182258, -4.60 - vo2
@@ -161,7 +161,8 @@ def _real_run(true_vdot, hr=135, minutes=50, warmup=True, walk=True, intervals=F
             fast = (t // 60) % 2 == 0
             sp, h = (v * 1.3, hr + 15) if fast else (v * 0.7, hr - 10)
         else:
-            sp, h = v, hr
+            t0 = drift_from_min * 60       # dryf: HR rośnie przy stałym tempie od t0 do końca
+            sp, h = v, hr * (1 + drift / 100 * max(0, t - t0) / (minutes * 60 - t0))
         rows.append([t, h, sp])
     det = _details(rows, ["sumDuration", "directHeartRate", "directSpeed"])
     avg_sp = np.mean([r[2] for r in rows]); avg_hr = np.mean([r[1] for r in rows])
@@ -187,3 +188,30 @@ def test_robust_max_hr_ignores_sensor_spike():
     assert M.robust_max_hr(values) == 176          # 176 potwierdzone przez 175 i 174; skoki się nie potwierdzają
     assert M.robust_max_hr([170, 215]) == 215      # za mało biegów, by odrzucić skok
     assert M.robust_max_hr([None, float("nan")]) is None
+
+
+def test_form_window_ignores_late_fatigue():
+    """Długi bieg, który „siada” w drugiej połowie: forma z okna zostaje prawdziwa."""
+    det = _real_run(40, minutes=110, drift=15, drift_from_min=45)[0]
+    blocks = M.steady_blocks(det)
+    assert all(len(b) == 3 for b in blocks) and blocks[-1][2] > M.FORM_WINDOW_END_S
+    in_window = M.vo2max_from_blocks(blocks, 48, 176)[0]
+    whole_run = M.vo2max_from_blocks(blocks, 48, 176, until_s=None)[0]
+    assert in_window == pytest.approx(40, abs=0.3)
+    assert whole_run < in_window - 1.0          # bez okna zmęczenie zaniża formę
+
+
+def test_form_window_reduces_bias_when_drift_starts_early():
+    det = _real_run(40, minutes=110, drift=15)[0]
+    blocks = M.steady_blocks(det)
+    in_window = M.vo2max_from_blocks(blocks, 48, 176)[0]
+    whole_run = M.vo2max_from_blocks(blocks, 48, 176, until_s=None)[0]
+    assert abs(in_window - 40) < abs(whole_run - 40) / 2
+
+
+def test_speed_at_hr_from_blocks():
+    det = _real_run(40, hr=135)[0]
+    blocks = M.steady_blocks(det)
+    sp_true = blocks[0][0]
+    assert M.speed_at_hr_from_blocks(blocks, 48, 176, 135) == pytest.approx(sp_true, rel=0.01)
+    assert M.speed_at_hr_from_blocks(blocks[:1], 48, 176, 135) is None   # za mało bloków
