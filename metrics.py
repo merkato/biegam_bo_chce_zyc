@@ -102,36 +102,56 @@ def slope_per_week(series: pd.Series, last_days: int = 28) -> float | None:
 def training_load(daily_trimp: pd.Series) -> pd.DataFrame:
     """CTL/ATL (Banister, stałe 42/7 dni), TSB (forma na dziś = wczorajsze CTL - ATL), ramp."""
     df = pd.DataFrame({"trimp": daily_trimp})
-    df["CTL"] = df["trimp"].ewm(alpha=1 / 42, adjust=False).mean()
-    df["ATL"] = df["trimp"].ewm(alpha=1 / 7, adjust=False).mean()
+    # Model startuje od zera: ewm(adjust=False) przyjąłby pierwszy dzień (często
+    # trening) jako stan początkowy, więc dokładamy zerowy dzień przed serią.
+    padded = pd.concat([pd.Series([0.0]), df["trimp"].reset_index(drop=True)], ignore_index=True)
+    df["CTL"] = padded.ewm(alpha=1 / 42, adjust=False).mean().iloc[1:].values
+    df["ATL"] = padded.ewm(alpha=1 / 7, adjust=False).mean().iloc[1:].values
     df["TSB"] = (df["CTL"] - df["ATL"]).shift(1)
     df["ramp"] = df["CTL"] - df["CTL"].shift(7)
     return df
 
 
+# --- strumienie ze szczegółów aktywności -----------------------------------
+
+_TIME_KEYS = ("sumDuration", "sumElapsedDuration", "directTimestamp")
+
+
+def streams_1hz(details: dict, wanted: dict[str, tuple[str, ...]], max_gap_s: int = 15) -> pd.DataFrame | None:
+    """Wybrane strumienie z get_activity_details przeliczone na 1 Hz.
+
+    Garmin zwraca dane przerzedzone (~2000 punktów na bieg), więc odtwarzamy
+    oś czasu w sekundach: krótkie luki wypełniamy ostatnią wartością, dłuższe
+    (pauza) zostają puste (NaN). `wanted`: {nazwa: (klucze Garmina w kolejności)}.
+    """
+    desc = {d.get("key"): d.get("metricsIndex") for d in (details or {}).get("metricDescriptors", [])}
+    t_key = next((k for k in _TIME_KEYS if k in desc), None)
+    cols = {name: next((desc[k] for k in keys if k in desc), None) for name, keys in wanted.items()}
+    if t_key is None or all(i is None for i in cols.values()):
+        return None
+    t_idx = desc[t_key]
+    rows_t, rows_v = [], []
+    for m in details.get("activityDetailMetrics", []):
+        vals = m.get("metrics", [])
+        if len(vals) <= t_idx or vals[t_idx] is None:
+            continue
+        rows_t.append(vals[t_idx] / 1000 if t_key == "directTimestamp" else vals[t_idx])
+        rows_v.append([vals[i] if i is not None and i < len(vals) else None for i in cols.values()])
+    if len(rows_t) < 2:
+        return None
+    df = pd.DataFrame(rows_v, columns=list(cols), index=np.round(np.asarray(rows_t, dtype=float) - rows_t[0]).astype(int), dtype=float)
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+    return df.reindex(range(0, int(df.index.max()) + 1)).ffill(limit=max_gap_s)
+
+
 # --- moc maksymalna (MMP) ---------------------------------------------------
 
 def power_series_1hz(details: dict) -> pd.Series | None:
-    """Strumień mocy z get_activity_details przeliczony na 1 Hz (dane Garmina są przerzedzone)."""
-    desc = {d.get("key"): d.get("metricsIndex") for d in details.get("metricDescriptors", [])}
-    p_idx = desc.get("directPower", desc.get("power"))
-    t_key = next((k for k in ("sumDuration", "sumElapsedDuration", "directTimestamp") if k in desc), None)
-    if p_idx is None or t_key is None:
+    """Moc 1 Hz; pauzy liczone jako 0 W, żeby nie zawyżać średnich."""
+    df = streams_1hz(details, {"power": ("directPower", "power")})
+    if df is None or df["power"].isna().all():
         return None
-    t_idx = desc[t_key]
-    t, p = [], []
-    for m in details.get("activityDetailMetrics", []):
-        vals = m.get("metrics", [])
-        if len(vals) > max(p_idx, t_idx) and vals[t_idx] is not None:
-            t.append(vals[t_idx] / 1000 if t_key == "directTimestamp" else vals[t_idx])
-            p.append(vals[p_idx] if vals[p_idx] is not None else 0.0)
-    if len(t) < 2:
-        return None
-    s = pd.Series(p, index=np.round(np.asarray(t) - t[0]).astype(int))
-    s = s[~s.index.duplicated(keep="last")].sort_index()
-    # do 1 Hz: krótkie luki (przerzedzenie) wypełniamy ostatnią wartością,
-    # dłuższe (pauza) zerem, żeby nie zawyżać mocy.
-    return s.reindex(range(0, int(s.index.max()) + 1)).ffill(limit=15).fillna(0.0)
+    return df["power"].fillna(0.0)
 
 
 def mmp_curve(details_list: list[dict], windows=(10, 30, 60, 300, 1200, 3600)) -> list[float | None]:
@@ -145,6 +165,128 @@ def mmp_curve(details_list: list[dict], windows=(10, 30, 60, 300, 1200, 3600)) -
             if len(s) >= w:
                 best[w] = max(best[w], float(s.rolling(w).mean().max()))
     return [round(best[w], 1) if best[w] > 0 else None for w in windows]
+
+
+# --- aerobic decoupling (Pa:HR) -------------------------------------------
+
+DECOUPLING_MIN_S = 40 * 60      # bieg co najmniej 40 min...
+DECOUPLING_WARMUP_S = 10 * 60   # ...pierwsze 10 min (rozgrzewka) pomijamy
+RUN_MIN_SPEED = 1.4             # m/s (~12 min/km): wolniej = marsz/postój, pomijamy
+
+
+def aerobic_decoupling(details: dict) -> float | None:
+    """Dryf sercowy w %: o ile spada stosunek tempo/tętno w drugiej połowie biegu.
+
+    (EF1 - EF2) / EF1 * 100, gdzie EF = prędkość / HR, liczone po rozgrzewce,
+    tylko z odcinków biegowych. < 5% = solidna baza tlenowa dla tego czasu
+    wysiłku, 5–10% = do pracy, > 10% = bieg był za długi/za mocny jak na formę
+    (albo upał, odwodnienie, podbiegi pod koniec).
+    """
+    df = streams_1hz(details, {"hr": ("directHeartRate",), "speed": ("directGradeAdjustedSpeed", "directSpeed")})
+    if df is None or df["hr"].isna().all() or df["speed"].isna().all():
+        return None
+    if len(df) < DECOUPLING_MIN_S:
+        return None
+    df = df.iloc[DECOUPLING_WARMUP_S:]
+    run = df[(df["speed"] >= RUN_MIN_SPEED) & (df["speed"] < 10) & (df["hr"] > 60)]
+    if len(run) < (DECOUPLING_MIN_S - DECOUPLING_WARMUP_S) * 0.8:
+        return None
+    half = len(run) // 2
+    ef1 = run["speed"].iloc[:half].mean() / run["hr"].iloc[:half].mean()
+    ef2 = run["speed"].iloc[half:].mean() / run["hr"].iloc[half:].mean()
+    return round(float((ef1 - ef2) / ef1 * 100), 1)
+
+
+# --- VDOT z równych odcinków biegu -----------------------------------------
+
+STEADY_BLOCK_S = 5 * 60   # blok ciągłego biegu
+STEADY_SPEED_CV = 0.10    # maks. zmienność tempa w bloku (interwały, podbiegi odpadają)
+STEADY_HR_SHIFT = 6       # maks. zmiana HR (bpm) między 1. a ostatnią minutą bloku
+STEADY_MIN_BLOCKS = 2     # co najmniej 10 min równego biegu
+
+
+def steady_blocks(details: dict) -> list[tuple[float, float]]:
+    """Równe odcinki biegu: [(średnia prędkość m/s, średnie HR)] dla 5-min bloków.
+
+    Pomija rozgrzewkę, marsz i postoje; blok musi mieć stałe tempo i
+    ustabilizowane tętno. Nie zależy od HR spoczynkowego/max, więc wynik
+    można zapisać w bazie raz na bieg.
+    """
+    df = streams_1hz(details, {"hr": ("directHeartRate",), "speed": ("directGradeAdjustedSpeed", "directSpeed")})
+    if df is None or df["hr"].isna().all() or df["speed"].isna().all():
+        return []
+    df = df.iloc[min(DECOUPLING_WARMUP_S, len(df) // 4):]
+    run = df[(df["speed"] >= RUN_MIN_SPEED) & (df["speed"] < 10) & (df["hr"] > 60)]
+    if len(run) < STEADY_BLOCK_S:
+        return []
+    sp_all, hr_all = run["speed"].to_numpy(), run["hr"].to_numpy()
+    # ciągłe fragmenty biegu: przerwa > 5 s (marsz, postój) rozcina fragment
+    pieces = np.split(np.arange(len(run)), np.where(np.diff(run.index.values) > 5)[0] + 1)
+    out = []
+    for piece in pieces:
+        for i in range(0, len(piece) - STEADY_BLOCK_S + 1, STEADY_BLOCK_S):
+            sl = piece[i:i + STEADY_BLOCK_S]
+            sp, hr = sp_all[sl], hr_all[sl]
+            if sp.std(ddof=1) / sp.mean() > STEADY_SPEED_CV:
+                continue
+            if abs(hr[-60:].mean() - hr[:60].mean()) > STEADY_HR_SHIFT:
+                continue
+            out.append((round(float(sp.mean()), 4), round(float(hr.mean()), 2)))
+    return out
+
+
+def vo2max_from_blocks(blocks, hr_rest: float, hr_max: float) -> tuple[float, int] | None:
+    """Mediana szacunków VO2max z równych bloków; None przy < STEADY_MIN_BLOCKS."""
+    ests = [e for e in (vo2max_from_run(sp, hr, hr_rest, hr_max) for sp, hr in blocks or []) if e == e]
+    if len(ests) < STEADY_MIN_BLOCKS:
+        return None
+    return float(np.median(ests)), len(ests)
+
+
+def steady_vo2max(details: dict, hr_rest: float, hr_max: float) -> tuple[float, int] | None:
+    """Szacunek VO2max tylko z równych, biegowych odcinków jednego biegu."""
+    return vo2max_from_blocks(steady_blocks(details), hr_rest, hr_max)
+
+
+# --- wyniki z jednego biegu, liczone raz i zapisywane w bazie ---------------
+
+DERIVED_VERSION = 1   # podbij po zmianie wzorów – wyniki przeliczą się same
+MMP_WINDOWS = (10, 30, 60, 300, 1200, 3600)
+
+
+def derive_run(details: dict) -> dict:
+    """Wszystko, czego dashboard potrzebuje ze szczegółów biegu (mały JSON)."""
+    p = power_series_1hz(details) if details else None
+    mmp = {str(w): round(float(p.rolling(w).mean().max()), 1) for w in MMP_WINDOWS if p is not None and len(p) >= w}
+    return {"v": DERIVED_VERSION, "blocks": steady_blocks(details) if details else [],
+            "decoupling": aerobic_decoupling(details) if details else None, "mmp": mmp}
+
+
+def mmp_from_derived(derived_list) -> list[float | None]:
+    best = {w: 0.0 for w in MMP_WINDOWS}
+    for d in derived_list:
+        for w in MMP_WINDOWS:
+            best[w] = max(best[w], (d or {}).get("mmp", {}).get(str(w)) or 0.0)
+    return [round(best[w], 1) if best[w] > 0 else None for w in MMP_WINDOWS]
+
+
+def robust_max_hr(values, tolerance: int = 3, confirmations: int = 3) -> int | None:
+    """Tętno maksymalne potwierdzone przez kilka biegów.
+
+    Najwyższa wartość, w promieniu ± `tolerance` bpm od której jest co najmniej
+    `confirmations` biegów (łącznie z nią) – pojedyncze skoki czujnika nadgarstkowego
+    (zwykle różne wartości) jej nie zawyżą.
+    Im więcej biegów w historii, tym pewniejsza wartość (kalibruje się sama).
+    """
+    v = sorted((float(x) for x in values if x is not None and x == x and 100 < float(x) < 230), reverse=True)
+    if not v:
+        return None
+    if len(v) < confirmations:
+        return int(round(v[0]))
+    for x in v:
+        if sum(1 for y in v if abs(y - x) <= tolerance) >= confirmations:
+            return int(round(x))
+    return int(round(v[0]))
 
 
 # --- zdrowie ----------------------------------------------------------------

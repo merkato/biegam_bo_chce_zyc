@@ -13,6 +13,7 @@ from garminconnect import (
 
 import analysis
 import garmin_session as gs
+import metrics
 import store
 import sync
 
@@ -93,9 +94,27 @@ def _analyze(email: str, password: str, start: date, end: date, user_hr_rest, us
     # 1) dociągnij braki do bazy, 2) licz wyłącznie z bazy
     sync.sync_range(gw, email, warm_start, end, daily_start, report)
 
-    def get_details(ids: list[int]) -> list[dict]:
-        sync.sync_details(gw, email, ids, report)
-        return [store.load_details(email, i) for i in ids]
+    def get_derived(ids: list[int], max_new: int | None = None) -> list[dict | None]:
+        """Wyniki z biegów (bloki, dryf, MMP): z bazy, a brakujące liczone raz ze szczegółów."""
+        sync.sync_details(gw, email, ids, report, max_new)
+        have = store.load_derived(email, ids)
+        out = []
+        for i in ids:
+            d = have.get(i)
+            if d is None or d.get("v") != metrics.DERIVED_VERSION:
+                raw = store.load_details(email, i)
+                if raw is None:          # jeszcze nie pobrane (limit na analizę)
+                    out.append(None)
+                    continue
+                d = metrics.derive_run(raw)
+                store.save_derived(email, i, d)
+            out.append(d)
+        return out
+
+    # HR max z całej historii biegów w bazie (rok) – im więcej biegów, tym pewniej
+    year_ago = (end - timedelta(days=365)).isoformat()
+    max_hr_history = [a.get("maxHR") for a in store.load_activities(email, year_ago, end.isoformat())
+                      if "running" in str((a.get("activityType") or {}).get("typeKey", ""))]
 
     try:
         result = analysis.analyze(
@@ -109,7 +128,8 @@ def _analyze(email: str, password: str, start: date, end: date, user_hr_rest, us
             user_hr_max=user_hr_max,
             hr_cap=hr_cap,
             waist_cm=waist_cm,
-            get_details=get_details,
+            get_derived=get_derived,
+            max_hr_history=max_hr_history,
         )
     finally:
         if gw.calls:

@@ -36,6 +36,12 @@ CREATE TABLE IF NOT EXISTS activity_details (
     fetched_at   REAL NOT NULL,
     PRIMARY KEY (email, activity_id)
 );
+CREATE TABLE IF NOT EXISTS activity_derived (
+    email        TEXT NOT NULL,
+    activity_id  INTEGER NOT NULL,
+    data         TEXT NOT NULL,          -- JSON z metrics.derive_run (z wersją)
+    PRIMARY KEY (email, activity_id)
+);
 CREATE TABLE IF NOT EXISTS daily (
     email           TEXT NOT NULL,
     date            TEXT NOT NULL,
@@ -185,6 +191,25 @@ def load_details(email: str, activity_id: int) -> dict | None:
             "SELECT raw FROM activity_details WHERE email=? AND activity_id=?", (email, int(activity_id))
         ).fetchone()
     return json.loads(zlib.decompress(row["raw"])) if row else None
+
+
+def load_derived(email: str, activity_ids: list[int]) -> dict[int, dict]:
+    if not activity_ids:
+        return {}
+    with connect() as db:
+        rows = db.execute(
+            f"SELECT activity_id, data FROM activity_derived WHERE email=? AND activity_id IN ({','.join('?' * len(activity_ids))})",
+            (email, *activity_ids),
+        ).fetchall()
+    return {r["activity_id"]: json.loads(r["data"]) for r in rows}
+
+
+def save_derived(email: str, activity_id: int, data: dict) -> None:
+    with connect() as db:
+        db.execute(
+            "INSERT OR REPLACE INTO activity_derived(email, activity_id, data) VALUES (?, ?, ?)",
+            (email, int(activity_id), json.dumps(data)),
+        )
 
 
 # --- daily (HRV, tętno spoczynkowe) -------------------------------------

@@ -100,7 +100,8 @@
                 <div class="big"><span x-text="k.vdot ?? '—'"></span>
                     <span class="unit" :class="k.vdot_delta_28d > 0 ? 'up' : (k.vdot_delta_28d < 0 ? 'down' : '')"
                           x-show="k.vdot_delta_28d != null" x-text="sign(k.vdot_delta_28d) + ' / 4 tyg.'"></span></div>
-                <div class="sub">Garmin: <b x-text="k.vo2_garmin ?? '—'"></b></div>
+                <div class="sub">Garmin: <b x-text="k.vo2_garmin ?? '—'"></b>
+                    <template x-if="k.vdot_runs"><span><br>z równych odcinków: <span x-text="k.vdot_seg"></span>/<span x-text="k.vdot_runs"></span> biegów (6 tyg.)</span></template></div>
             </div>
             <div class="card kpi" :class="k.pace_ref_delta_s_28d < 0 ? 'good' : ''">
                 <h3>Tempo przy <span x-text="k.hr_ref"></span> bpm</h3>
@@ -109,6 +110,13 @@
                     <span :class="k.pace_ref_delta_s_28d < 0 ? 'up' : (k.pace_ref_delta_s_28d > 0 ? 'down' : '')"
                           x-text="(k.pace_ref_delta_s_28d < 0 ? 'szybciej o ' : (k.pace_ref_delta_s_28d > 0 ? 'wolniej o ' : 'bez zmian ')) + (k.pace_ref_delta_s_28d ? Math.abs(k.pace_ref_delta_s_28d) + ' s/km' : '')"></span> niż 4 tyg. temu
                 </div>
+            </div>
+            <div class="card kpi" :class="k.decoupling == null ? '' : (k.decoupling < 5 ? 'good' : (k.decoupling <= 10 ? 'warn' : 'alert'))">
+                <h3>Dryf tętna (Pa:HR)</h3>
+                <div class="big"><span x-text="k.decoupling != null ? k.decoupling : '—'"></span> <span class="unit" x-show="k.decoupling != null">%</span></div>
+                <div class="sub" x-show="k.decoupling != null">mediana z <span x-text="k.decoupling_n"></span> ost. biegów ≥40 min ·
+                    <b x-text="k.decoupling < 5 ? 'solidna baza' : (k.decoupling <= 10 ? 'baza do budowy' : 'za długo / za mocno')"></b></div>
+                <div class="sub" x-show="k.decoupling == null" style="color:#999;">Brak biegów ≥40 min z tętnem i tempem</div>
             </div>
             <div class="card kpi" :class="loadClass()">
                 <h3>Obciążenie</h3>
@@ -158,6 +166,7 @@
             <div class="card"><div id="chart-pred" class="plot-container"></div></div>
             <div class="card"><div id="chart-vo2" class="plot-container"></div></div>
             <div class="card"><div id="chart-pace-ref" class="plot-container"></div></div>
+            <div class="card"><div id="chart-dec" class="plot-container"></div></div>
             <div class="card"><div id="chart-ef" class="plot-container"></div></div>
             <div class="card"><div id="chart-rhr" class="plot-container"></div></div>
             <div class="card"><div id="chart-weight" class="plot-container"></div></div>
@@ -174,7 +183,9 @@
         </details>
 
         <p class="note">
-            Prognozy własne: VO₂max szacowane z każdego równego biegu ≥20 min (koszt tlenowy tempa wg Danielsa / %HRR),
+            Prognozy własne: VO₂max szacowane z biegów ≥20 min (koszt tlenowy tempa wg Danielsa / %HRR) – z 5-minutowych
+            odcinków równego biegu, bez rozgrzewki, marszu i postojów (szczegóły biegów dociągane stopniowo; do tego czasu ze średniej biegu).
+            HR max: najwyższe tętno potwierdzone przez co najmniej 3 biegi z ostatniego roku – pojedyncze skoki czujnika nie liczą się.
             mediana z 6 tygodni, czasy z tablic VDOT. Zakładają start na maksymalny wysiłek – przy ograniczeniach kardiologicznych
             traktuj je jako miarę formy, nie cel do pobiegnięcia. Beta-blokery zaniżają tętno i zawyżają szacunki oparte na HR.
             Cel BMI: WHO 18,5–24,9; dla 65+ przyjęto 23–27. To nie jest porada medyczna.
@@ -183,7 +194,7 @@
 </div>
 
 <script>
-const CHART_IDS = ['chart-heatmap', 'chart-endurance', 'chart-pred', 'chart-vo2', 'chart-pace-ref', 'chart-ef',
+const CHART_IDS = ['chart-heatmap', 'chart-endurance', 'chart-pred', 'chart-vo2', 'chart-pace-ref', 'chart-dec', 'chart-ef',
                    'chart-rhr', 'chart-weight', 'chart-cap', 'chart-mmp', 'chart-pow', 'chart-biomech'];
 const STORE_KEY = 'biegam.form';
 
@@ -330,8 +341,15 @@ document.addEventListener('alpine:init', () => {
             } else this.empty('chart-pred', 'Za mało równych biegów ≥20 min z tętnem');
 
             // VO2max
+            const pick = (src) => {
+                const x = [], y = [];
+                F.run_dates.forEach((d, i) => { if (F.vdot_src[i] === src) { x.push(d); y.push(F.vdot_run[i]); } });
+                return { x, y };
+            };
+            const seg = pick('seg'), avg = pick('avg');
             const vo2Tr = [
-                { x: F.run_dates, y: F.vdot_run, mode: 'markers', name: 'Szacunek z biegu', marker: {color: 'rgba(31,119,180,0.35)', size: 6} },
+                { ...seg, mode: 'markers', name: 'Bieg: równe odcinki', marker: {color: 'rgba(31,119,180,0.55)', size: 7} },
+                { ...avg, mode: 'markers', name: 'Bieg: średnia (bez szczegółów)', marker: {color: 'rgba(31,119,180,0.5)', size: 6, symbol: 'circle-open'} },
                 { x: F.trend_dates, y: F.vdot_trend, mode: 'lines', name: 'VDOT (mediana 6 tyg.)', line: {color: '#1f77b4', width: 3} },
             ];
             if (F.vo2_garmin_run && F.vo2_garmin_run.some(v => v))
@@ -347,6 +365,23 @@ document.addEventListener('alpine:init', () => {
                 title: { text: `Tempo przy ${F.hr_ref} bpm – wydolność tlenowa`, x: 0 }, legend: topLegend,
                 yaxis: { title: 'min/km', autorange: 'reversed', ...this.paceTicks(F.pace_ref_run.concat(F.pace_ref_trend)) }, margin: { t: 75, b: 40, l: 50, r: 15 }
             });
+
+            // DRYF TĘTNA (aerobic decoupling)
+            const dec = F.decoupling || [];
+            if (dec.length) {
+                const zone = (y0, y1, c) => ({ type: 'rect', xref: 'paper', x0: 0, x1: 1, y0, y1, fillcolor: c, line: {width: 0}, layer: 'below' });
+                const ymax = Math.max(15, ...dec.map(d => d.pct + 2)), ymin = Math.min(0, ...dec.map(d => d.pct - 2));
+                this.renderPlot('chart-dec', [{
+                    x: dec.map(d => d.date), y: dec.map(d => d.pct), type: 'bar', name: 'Dryf',
+                    marker: {color: dec.map(d => d.pct < 5 ? '#2ca02c' : (d.pct <= 10 ? '#e67e22' : '#d62728'))},
+                    customdata: dec.map(d => d.min), hovertemplate: '%{x}: %{y}% (bieg %{customdata} min)<extra></extra>'
+                }], {
+                    title: { text: 'Dryf tętna na długich biegach (Pa:HR)', x: 0 },
+                    yaxis: { title: '% spadku tempo/HR w 2. połowie', range: [ymin, ymax] },
+                    shapes: [zone(ymin, 5, 'rgba(44,160,44,0.08)'), zone(5, 10, 'rgba(230,126,34,0.08)'), zone(10, ymax, 'rgba(214,39,40,0.06)')],
+                    margin: { t: 60, b: 40, l: 55, r: 15 }
+                });
+            } else this.empty('chart-dec', 'Brak biegów ≥40 min z tętnem i tempem');
 
             // EF vs HRV
             const bandX = [], bandU = [], bandL = [];

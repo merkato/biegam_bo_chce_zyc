@@ -55,9 +55,13 @@ def sync_range(gw: Gateway, email: str, start: date, end: date, daily_start: dat
         report.calls = gw.calls
 
 
-def sync_details(gw: Gateway, email: str, activity_ids: list[int], report: SyncReport) -> None:
+def sync_details(gw: Gateway, email: str, activity_ids: list[int], report: SyncReport, max_new: int | None = None) -> None:
+    """Pobiera brakujące szczegóły w podanej kolejności (najwyżej `max_new` nowych)."""
+    missing = store.missing_details(email, activity_ids)
+    if max_new is not None:
+        missing = missing[:max_new]
     try:
-        for act_id in store.missing_details(email, activity_ids):
+        for act_id in missing:
             try:
                 store.save_details(email, act_id, gw.call("get_activity_details", act_id) or {})
             except FATAL:

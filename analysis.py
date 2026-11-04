@@ -13,6 +13,10 @@ import pandas as pd
 import metrics as M
 
 
+DECOUPLING_MAX_RUNS = 20   # tyle ostatnich długich biegów z zakresu analizujemy
+SEG_DETAILS_PER_ANALYSIS = 30   # nowych szczegółów biegów na jedną analizę (ochrona przed banem)
+
+
 class NoData(Exception):
     pass
 
@@ -94,9 +98,15 @@ def analyze(
     user_hr_max: int | None,
     hr_cap: int | None,
     waist_cm: float | None,
-    get_details: Callable[[list[int]], list[dict]],
+    get_derived: Callable[..., list[dict | None]],
+    max_hr_history: list | None = None,
 ) -> dict:
-    """`activities` obejmują też okres rozruchowy przed `start` (dla CTL)."""
+    """`activities` obejmują też okres rozruchowy przed `start` (dla CTL).
+
+    `get_derived(ids, max_new=None)` zwraca wyniki z biegów (metrics.derive_run;
+    None, gdy szczegóły jeszcze nie pobrane); `max_hr_history` to HR max biegów
+    z ostatniego roku w bazie.
+    """
     start_ts, end_ts = pd.Timestamp(start), pd.Timestamp(end)
     today_ts = pd.Timestamp.today().normalize()
 
@@ -113,12 +123,9 @@ def analyze(
     # --- fizjologia ---
     hr_rest = user_hr_rest if user_hr_rest is not None else resting_hr_from_daily(daily_rows)
     max_hr_col = _col(runs, 'maxHR', 'maxHeartRateInBeatsPerMinute')
-    if user_hr_max is not None:
-        hr_max = user_hr_max
-    elif max_hr_col and runs[max_hr_col].notna().any():
-        hr_max = int(pd.to_numeric(runs[max_hr_col], errors='coerce').max())
-    else:
-        hr_max = 185
+    run_max = pd.to_numeric(runs[max_hr_col], errors='coerce').tolist() if max_hr_col else []
+    hr_max_auto = M.robust_max_hr(list(max_hr_history or []) + run_max)
+    hr_max = user_hr_max if user_hr_max is not None else (hr_max_auto or 185)
     hr_max = max(hr_max, hr_rest + 20)
     hr_ref = hr_cap or int(round(hr_rest + 0.65 * (hr_max - hr_rest)))
 
@@ -145,6 +152,20 @@ def analyze(
     steady = runs['dur'] >= 20 * 60
     runs['vdot_run'] = [M.vo2max_from_run(s, h, hr_rest, hr_max) if ok else np.nan
                         for s, h, ok in zip(runs['speed'], runs['hr'], steady)]
+    runs['vdot_src'] = np.where(runs['vdot_run'].notna(), 'avg', None)
+
+    # Lepszy szacunek z równych odcinków (szczegóły biegu). Pobieramy je stopniowo,
+    # od najnowszych, najwyżej SEG_DETAILS_PER_ANALYSIS nowych na analizę – reszta
+    # biegów do czasu pobrania korzysta ze średniej z całego biegu.
+    seg_cand = runs[steady & (runs['date'] >= start_ts - pd.Timedelta(days=42))]
+    if 'activityId' in runs:
+        seg_cand = seg_cand.dropna(subset=['activityId']).sort_values('startTimeLocal', ascending=False)
+        seg_ids = [int(i) for i in seg_cand['activityId']]
+        for idx, der in zip(seg_cand.index, get_derived(seg_ids, max_new=SEG_DETAILS_PER_ANALYSIS)):
+            res = M.vo2max_from_blocks(der["blocks"], hr_rest, hr_max) if der else None
+            if res:
+                runs.at[idx, 'vdot_run'], runs.at[idx, 'vdot_src'] = res[0], 'seg'
+
     hrr = M.hrr_fraction(runs['hr'], hr_rest, hr_max)
     ok_ref = (runs['dur'] >= 15 * 60) & hrr.between(0.4, 0.97)
     runs['spd_ref'] = [M.speed_at_hr(s, h, hr_rest, hr_ref) if ok else np.nan
@@ -210,14 +231,27 @@ def analyze(
     # --- MMP z 5 biegów o najwyższym TRIMP w zakresie ---
     in_range = runs[runs['date'] >= start_ts]
     top_ids = [int(i) for i in in_range.nlargest(5, 'trimp')['activityId'].dropna()] if 'activityId' in runs else []
-    mmp_vals = M.mmp_curve(get_details(top_ids))
+    mmp_vals = M.mmp_from_derived(get_derived(top_ids))
+
+    # --- aerobic decoupling z długich biegów (szczegóły pobierane raz, potem z bazy) ---
+    long_runs = in_range[in_range['dur'] >= M.DECOUPLING_MIN_S].tail(DECOUPLING_MAX_RUNS) if 'activityId' in runs else in_range.iloc[:0]
+    long_ids = [int(i) for i in long_runs['activityId'].dropna()]
+    dec = []
+    for (_, row), der in zip(long_runs.iterrows(), get_derived(long_ids)):
+        pct = der.get("decoupling") if der else None
+        if pct is not None:
+            dec.append({"date": row['date'].strftime('%Y-%m-%d'), "pct": pct, "min": int(row['dur'] // 60)})
+    dec_recent = [d["pct"] for d in dec[-4:]]
 
     # --- forma: VDOT, VO2max Garmina, tempo przy HR, prognozy ---
+    recent_src = runs.loc[runs['date'] > runs['date'].max() - pd.Timedelta(days=42), 'vdot_src']
     vdot_trend = M.rolling_median_by_time(runs['date'], runs['vdot_run'], days=42, min_n=3)
     spd_ref_trend = M.ewm_by_time(runs['date'], runs['spd_ref'], halflife_days=14)
     pace_ref_trend = 1000 / spd_ref_trend / 60
     vo2_garmin = M.ewm_by_time(runs['date'], num(vo2_col), 1) if vo2_col else pd.Series(dtype=float)
     vdot_now = _last(vdot_trend)
+    t10_now = M.race_time_from_vdot(vdot_now, M.KM10) if vdot_now else None
+    thm_now = M.race_time_from_vdot(vdot_now, M.HM) if vdot_now else None
     own_10k = [M.race_time_from_vdot(v, M.KM10) for v in vdot_trend.values]
     own_hm = [M.race_time_from_vdot(v, M.HM) for v in vdot_trend.values]
 
@@ -230,6 +264,7 @@ def analyze(
     fitness = {
         "run_dates": _ds(r_view['date']),
         "vdot_run": _clean(r_view['vdot_run']),
+        "vdot_src": [v if isinstance(v, str) else None for v in r_view['vdot_src']],
         "vo2_garmin_run": _clean(num(vo2_col)[r_view.index]) if vo2_col else [],
         "pace_ref_run": _clean(1000 / r_view['spd_ref'] / 60),
         "max_hr_run": _clean(pd.to_numeric(r_view[max_hr_col], errors='coerce')) if max_hr_col else [],
@@ -244,6 +279,7 @@ def analyze(
         "garmin_10k": _clean(pred['pred_10k'][pred.index >= start_ts]) if len(pred) else [],
         "garmin_hm": _clean(pred['pred_hm'][pred.index >= start_ts]) if len(pred) else [],
         "hr_ref": hr_ref,
+        "decoupling": dec,
     }
 
     # --- zdrowie: tętno spoczynkowe, waga, BMI, talia ---
@@ -261,13 +297,15 @@ def analyze(
     ctl_now = _last(load['CTL'][load.index <= today_ts])
     kpi = {
         "vdot": round(vdot_now, 1) if vdot_now else None,
+        "vdot_seg": int((recent_src == 'seg').sum()),
+        "vdot_runs": int(recent_src.notna().sum()),
         "vdot_delta_28d": _delta(vdot_trend, 28),
         "vo2_garmin": round(_last(vo2_garmin), 1) if len(vo2_garmin) else profile.get("vo2max_running"),
-        "own_10k": M.fmt_time(M.race_time_from_vdot(vdot_now, M.KM10)) if vdot_now else None,
-        "own_hm": M.fmt_time(M.race_time_from_vdot(vdot_now, M.HM)) if vdot_now else None,
+        "own_10k": M.fmt_time(t10_now),
+        "own_hm": M.fmt_time(thm_now),
         "garmin_10k": M.fmt_time(g10), "garmin_hm": M.fmt_time(ghm),
-        "pace_10k": M.fmt_pace(M.race_time_from_vdot(vdot_now, M.KM10) / 10) if vdot_now else None,
-        "pace_hm": M.fmt_pace(M.race_time_from_vdot(vdot_now, M.HM) / 21.0975) if vdot_now else None,
+        "pace_10k": M.fmt_pace(t10_now / 10) if t10_now else None,
+        "pace_hm": M.fmt_pace(thm_now / 21.0975) if thm_now else None,
         "hr_ref": hr_ref,
         "pace_ref": M.fmt_pace(_last(pace_ref_trend)),
         "pace_ref_delta_s_28d": _pace_delta_s(pace_ref_trend, 28),
@@ -275,6 +313,8 @@ def analyze(
         "tsb": _round(_last(load['TSB'][load.index <= today_ts])),
         "ramp": _round(_last(load['ramp'][load.index <= today_ts])),
         "hr_cap": cap,
+        "decoupling": round(float(np.median(dec_recent)), 1) if dec_recent else None,
+        "decoupling_n": len(dec_recent),
         **kpi_health,
     }
 
