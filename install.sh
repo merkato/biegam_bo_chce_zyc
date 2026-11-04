@@ -20,17 +20,22 @@ apt update
 apt install -y python3-pip python3-venv
 
 echo "🐍 Tworzenie środowiska wirtualnego Pythona (venv)..."
-python3 -m venv venv
+# --clear: zawsze świeży venv. Skrypty w venv/bin mają na sztywno wpisaną ścieżkę,
+# więc po przeniesieniu katalogu (np. /root -> /opt) stary venv przestaje działać.
+python3 -m venv --clear venv
 
 echo "📚 Instalowanie zależności z użyciem pip..."
-./venv/bin/pip install --upgrade pip
-
-./venv/bin/pip install -r requirements.txt
+./venv/bin/python -m pip install --upgrade pip
+./venv/bin/python -m pip install -r requirements.txt
 
 echo "👤 Tworzenie użytkownika systemowego 'garmin' (bez powłoki i hasła)..."
 APP_USER=garmin
 id -u "$APP_USER" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin "$APP_USER"
-chown -R "$APP_USER":"$APP_USER" "$APP_DIR"
+# Kod zostaje własnością roota (usługa nie może go zmienić, a `git pull` jako root
+# nie zgłasza „dubious ownership”). Usługa pisze tylko do data/ (baza i tokeny).
+mkdir -p "$APP_DIR/data"
+chown -R "$APP_USER":"$APP_USER" "$APP_DIR/data"
+chmod 700 "$APP_DIR/data"
 if ! runuser -u "$APP_USER" -- test -r "$APP_DIR/main.py"; then
   echo "❌ Użytkownik '$APP_USER' nie ma dostępu do $APP_DIR (np. katalog w /root)."
   echo "   Przenieś repozytorium np. do /opt/biegam i uruchom skrypt ponownie."
@@ -50,13 +55,13 @@ After=network.target
 User=$APP_USER
 Group=$APP_USER
 WorkingDirectory=$APP_DIR
-ExecStart=$APP_DIR/venv/bin/gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind [::]:8000 --timeout 180 --access-logfile -
+ExecStart=$APP_DIR/venv/bin/python -m gunicorn -w 1 -k uvicorn.workers.UvicornWorker main:app --bind [::]:8000 --timeout 180 --access-logfile -
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=$APP_DIR
+ReadWritePaths=$APP_DIR/data
 
 [Install]
 WantedBy=multi-user.target
