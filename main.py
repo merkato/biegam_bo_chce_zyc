@@ -25,6 +25,7 @@ store.init()
 
 HRV_LEAD_DAYS = 45      # HRV/RHR sprzed zakresu – na rozbieg średnich kroczących
 DAILY_MAX_DAYS = 365    # dłużej wstecz nie pobieramy danych dziennych
+LOAD_WARMUP_DAYS = 84   # 2 x 42 dni: rozruch CTL, żeby wykres nie startował od zera
 
 # Najwyżej jedna analiza naraz – równoległe zapytania wyglądają jak scraper.
 _analysis_lock = threading.Lock()
@@ -44,7 +45,9 @@ def analyze_garmin(
     start_date: str = Form(...),
     end_date: str = Form(...),
     user_hr_rest: int = Form(None),
-    user_hr_max: int = Form(None)
+    user_hr_max: int = Form(None),
+    hr_cap: int = Form(None),
+    waist_cm: float = Form(None),
 ):
     wait = gs.cooldown_remaining()
     if wait > 0:
@@ -59,7 +62,7 @@ def analyze_garmin(
     if not _analysis_lock.acquire(blocking=False):
         raise HTTPException(429, "Trwa inna analiza. Poczekaj chwilę.")
     try:
-        return _analyze(email, password, start_d, end_d, user_hr_rest, user_hr_max)
+        return _analyze(email, password, start_d, end_d, user_hr_rest, user_hr_max, hr_cap, waist_cm)
     except HTTPException:
         raise
     except analysis.NoData as e:
@@ -80,14 +83,15 @@ def analyze_garmin(
         _analysis_lock.release()
 
 
-def _analyze(email: str, password: str, start: date, end: date, user_hr_rest, user_hr_max) -> dict:
+def _analyze(email: str, password: str, start: date, end: date, user_hr_rest, user_hr_max, hr_cap, waist_cm) -> dict:
     client = gs.get_client(email, password)
     gw = gs.Gateway(client)
     report = sync.SyncReport()
     daily_start = max(start - timedelta(days=HRV_LEAD_DAYS), end - timedelta(days=DAILY_MAX_DAYS))
+    warm_start = start - timedelta(days=LOAD_WARMUP_DAYS)
 
     # 1) dociągnij braki do bazy, 2) licz wyłącznie z bazy
-    sync.sync_range(gw, email, start, end, daily_start, report)
+    sync.sync_range(gw, email, warm_start, end, daily_start, report)
 
     def get_details(ids: list[int]) -> list[dict]:
         sync.sync_details(gw, email, ids, report)
@@ -95,12 +99,16 @@ def _analyze(email: str, password: str, start: date, end: date, user_hr_rest, us
 
     try:
         result = analysis.analyze(
-            activities=store.load_activities(email, start.isoformat(), end.isoformat()),
+            activities=store.load_activities(email, warm_start.isoformat(), end.isoformat()),
             daily_rows=store.load_daily(email, daily_start.isoformat(), end.isoformat()),
-            daily_start=daily_start,
+            profile=store.get_meta(email, "profile", {}) or {},
+            start=start,
             end=end,
+            daily_start=daily_start,
             user_hr_rest=user_hr_rest,
             user_hr_max=user_hr_max,
+            hr_cap=hr_cap,
+            waist_cm=waist_cm,
             get_details=get_details,
         )
     finally:

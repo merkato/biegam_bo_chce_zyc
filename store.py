@@ -54,6 +54,17 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 
 
+# Grupy danych dziennych: każda ma własny znacznik `<grupa>_fetched_at`,
+# bo każdą pobieramy osobnym zapytaniem zakresowym.
+DAILY_GROUPS = {
+    "hrv": ("hrv",),
+    "rhr": ("rhr",),
+    "weight": ("weight", "body_fat", "muscle_mass"),
+    "pred": ("pred_5k", "pred_10k", "pred_hm"),
+}
+DAILY_COLUMNS = tuple(c for cols in DAILY_GROUPS.values() for c in cols)
+
+
 def init() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     try:
@@ -62,6 +73,12 @@ def init() -> None:
         pass
     with connect() as db:
         db.executescript(_SCHEMA)
+        # Migracja: dokładamy kolumny grup dziennych, których jeszcze nie ma.
+        have = {r["name"] for r in db.execute("PRAGMA table_info(daily)")}
+        for group, cols in DAILY_GROUPS.items():
+            for col in (*cols, f"{group}_fetched_at"):
+                if col not in have:
+                    db.execute(f"ALTER TABLE daily ADD COLUMN {col} REAL")
 
 
 @contextmanager
@@ -172,33 +189,43 @@ def load_details(email: str, activity_id: int) -> dict | None:
 
 # --- daily (HRV, tętno spoczynkowe) -------------------------------------
 
-def daily_fetch_times(email: str, start: str, end: str, field: str) -> dict[str, float | None]:
-    """{data: kiedy pobrano `field`} dla dni, które są w bazie."""
-    assert field in ("hrv", "rhr")
+def daily_fetch_times(email: str, start: str, end: str, group: str) -> dict[str, float | None]:
+    """{data: kiedy pobrano grupę `group`} dla dni, które są w bazie."""
+    assert group in DAILY_GROUPS
     with connect() as db:
         rows = db.execute(
-            f"SELECT date, {field}_fetched_at AS t FROM daily WHERE email=? AND date BETWEEN ? AND ?",
+            f"SELECT date, {group}_fetched_at AS t FROM daily WHERE email=? AND date BETWEEN ? AND ?",
             (email, start, end),
         ).fetchall()
     return {r["date"]: r["t"] for r in rows}
 
 
-def save_daily(email: str, field: str, values: dict[str, float | None]) -> None:
-    """Zapisuje wartości (także None = „Garmin nie ma danych”) z czasem pobrania."""
-    assert field in ("hrv", "rhr")
+def save_daily(email: str, group: str, values: dict) -> None:
+    """Zapisuje grupę dla podanych dni (także None = „Garmin nie ma danych”).
+
+    `values`: {data: wartość} dla grup jednokolumnowych albo {data: {kolumna: wartość}}.
+    """
+    cols = DAILY_GROUPS[group]
     now = time.time()
+    rows = []
+    for d, v in values.items():
+        v = v if isinstance(v, dict) else {cols[0]: v}
+        rows.append((email, d, *(v.get(c) for c in cols), now))
+    names = ", ".join(cols)
+    updates = ", ".join(f"{c}=excluded.{c}" for c in (*cols, f"{group}_fetched_at"))
     with connect() as db:
         db.executemany(
-            f"INSERT INTO daily(email, date, {field}, {field}_fetched_at) VALUES (?, ?, ?, ?) "
-            f"ON CONFLICT(email, date) DO UPDATE SET {field}=excluded.{field}, {field}_fetched_at=excluded.{field}_fetched_at",
-            [(email, d, v, now) for d, v in values.items()],
+            f"INSERT INTO daily(email, date, {names}, {group}_fetched_at) "
+            f"VALUES (?, ?, {', '.join('?' * len(cols))}, ?) "
+            f"ON CONFLICT(email, date) DO UPDATE SET {updates}",
+            rows,
         )
 
 
 def load_daily(email: str, start: str, end: str) -> list[dict]:
     with connect() as db:
         rows = db.execute(
-            "SELECT date, hrv, rhr FROM daily WHERE email=? AND date BETWEEN ? AND ? ORDER BY date",
+            f"SELECT date, {', '.join(DAILY_COLUMNS)} FROM daily WHERE email=? AND date BETWEEN ? AND ? ORDER BY date",
             (email, start, end),
         ).fetchall()
     return [dict(r) for r in rows]

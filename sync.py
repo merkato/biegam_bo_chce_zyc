@@ -4,6 +4,8 @@
   dociągamy tylko brakujący początek i świeży koniec,
 - HRV i tętno spoczynkowe: zapytania zakresowe (HRV po 28 dni, RHR do roku),
   każdy dzień raz; ostatnie RECENT_DAYS dni odświeżamy, bo mogą się zmienić,
+- waga/skład ciała i prognozy biegowe Garmina: zakresowo (do roku na raz),
+- profil (data urodzenia, wzrost, płeć): raz na PROFILE_REFRESH_S,
 - szczegóły aktywności: raz na zawsze.
 """
 import logging
@@ -20,6 +22,8 @@ RECENT_DAYS = 3
 REFRESH_S = 15 * 60
 HRV_CHUNK_DAYS = 28
 RHR_CHUNK_DAYS = 365
+YEAR_CHUNK_DAYS = 365
+PROFILE_REFRESH_S = 7 * 24 * 3600
 DAY = timedelta(days=1)
 
 
@@ -41,6 +45,9 @@ def sync_range(gw: Gateway, email: str, start: date, end: date, daily_start: dat
         _sync_activities(gw, email, start, end)
         _sync_daily(gw, email, "rhr", daily_start, end, RHR_CHUNK_DAYS, _fetch_rhr)
         _sync_daily(gw, email, "hrv", daily_start, end, HRV_CHUNK_DAYS, _fetch_hrv)
+        _sync_daily(gw, email, "weight", daily_start, end, YEAR_CHUNK_DAYS, _fetch_weight)
+        _sync_daily(gw, email, "pred", daily_start, end, YEAR_CHUNK_DAYS, _fetch_pred)
+        _sync_profile(gw, email)
     except BudgetExceeded:
         report.partial = True
         report.notes.append("Limit zapytań na jedną analizę wyczerpany – reszta danych dociągnie się przy następnej.")
@@ -183,3 +190,53 @@ def _fetch_hrv(gw: Gateway, a: date, b: date) -> dict[str, float]:
             log.debug("Brak HRV dla %s", d, exc_info=True)
         d += DAY
     return out
+
+
+def _fetch_weight(gw: Gateway, a: date, b: date) -> dict[str, dict]:
+    res = gw.call("get_body_composition", a.isoformat(), b.isoformat()) or {}
+    rows = res.get("dateWeightList") if isinstance(res, dict) else res
+    out: dict[str, dict] = {}
+    for r in rows or []:
+        d, w = r.get("calendarDate"), r.get("weight")
+        if not d or not w:
+            continue
+        mm = r.get("muscleMass")
+        # Garmin podaje masę w gramach; kilka ważeń dziennie -> zostaje ostatnie.
+        out[d] = {
+            "weight": w / 1000 if w > 1000 else w,
+            "body_fat": r.get("bodyFat"),
+            "muscle_mass": (mm / 1000 if mm and mm > 1000 else mm),
+        }
+    return out
+
+
+def _fetch_pred(gw: Gateway, a: date, b: date) -> dict[str, dict]:
+    res = gw.call("get_race_predictions", a.isoformat(), b.isoformat(), "daily")
+    rows = res if isinstance(res, list) else (res or {}).get("racePredictions") or []
+    out = {}
+    for r in rows:
+        d = r.get("calendarDate")
+        if d and r.get("time10K"):
+            out[d] = {"pred_5k": r.get("time5K"), "pred_10k": r.get("time10K"), "pred_hm": r.get("timeHalfMarathon")}
+    return out
+
+
+def _sync_profile(gw: Gateway, email: str) -> None:
+    if time.time() - store.get_meta(email, "profile_at", 0) < PROFILE_REFRESH_S:
+        return
+    try:
+        res = gw.call("get_user_profile") or {}
+    except (*FATAL, BudgetExceeded):
+        raise
+    except Exception:
+        log.warning("Nie udało się pobrać profilu", exc_info=True)
+        return
+    u = res.get("userData") or {}
+    store.set_meta(email, "profile", {
+        "birth_date": u.get("birthDate"),
+        "height_cm": u.get("height"),
+        "gender": u.get("gender"),
+        "vo2max_running": u.get("vo2MaxRunning"),
+        "lthr": u.get("lactateThresholdHeartRate"),
+    })
+    store.set_meta(email, "profile_at", time.time())

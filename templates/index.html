@@ -2,316 +2,460 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Garmin Trends Analyzer</title>
     <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
-        body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; }
+        body { font-family: sans-serif; background: #f4f4f9; margin: 0; padding: 20px; color: #2c3e50; }
         .container { max-width: 1800px; margin: 0 auto; }
-        
-        .card { 
-            background: white; 
-            padding: 15px; 
-            border-radius: 8px; 
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
-            min-width: 0; 
-            overflow: hidden; 
-            box-sizing: border-box;
-        }
-        
+        .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); min-width: 0; overflow: hidden; box-sizing: border-box; }
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        
-        /* Górny rząd: Workout Map (węższy) + Endurance (szerszy) */
-        .top-grid {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 20px;
-            margin-bottom: 20px;
-            width: 100%;
-        }
-        @media (min-width: 1100px) {
-            .top-grid { grid-template-columns: 35fr 65fr; }
-        }
-
-        /* Dolna siatka dla pozostałych 6 wykresów */
-        .charts-grid { 
-            display: grid; 
-            grid-template-columns: 1fr; 
-            gap: 20px; 
-            width: 100%;
-        }
-        @media (min-width: 850px) {
-            .charts-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-        @media (min-width: 1400px) {
-            .charts-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        }
-        
+        .top-grid { display: grid; grid-template-columns: 1fr; gap: 20px; margin-bottom: 20px; }
+        @media (min-width: 1100px) { .top-grid { grid-template-columns: 35fr 65fr; } }
+        .charts-grid { display: grid; grid-template-columns: 1fr; gap: 20px; }
+        @media (min-width: 850px) { .charts-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+        @media (min-width: 1400px) { .charts-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
         .plot-container { width: 100%; height: 380px; }
-        
         input, button { padding: 10px; width: 100%; box-sizing: border-box; margin-top: 5px; }
-        button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px;}
+        button { background: #1f77b4; color: white; border: none; cursor: pointer; font-weight: bold; margin-top: 15px; }
         label { font-size: 0.9em; color: #555; }
+
+        .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 20px; }
+        .kpi { border-top: 4px solid #1f77b4; }
+        .kpi.warn { border-top-color: #e67e22; }
+        .kpi.alert { border-top-color: #d62728; }
+        .kpi.good { border-top-color: #2ca02c; }
+        .kpi h3 { margin: 0 0 6px; font-size: 0.8em; text-transform: uppercase; letter-spacing: .04em; color: #7f8c8d; font-weight: 600; }
+        .kpi .big { font-size: 1.9em; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+        .kpi .unit { font-size: 0.5em; font-weight: 400; color: #7f8c8d; }
+        .kpi .sub { font-size: 0.85em; color: #555; margin-top: 6px; line-height: 1.4; }
+        .up { color: #2ca02c; } .down { color: #d62728; }
+        details.more { margin-top: 20px; }
+        details.more > summary { cursor: pointer; font-weight: bold; padding: 10px 0; }
+        .note { font-size: 0.8em; color: #7f8c8d; margin-top: 24px; line-height: 1.5; }
     </style>
 </head>
 <body>
 
-    <div class="container" x-data="dashboard()">
-        <h1 x-show="!dataLoaded" style="text-align: center; color: #2c3e50;">Analizator Formy Biegowej</h1>
-        <h1 x-show="dataLoaded" style="text-align: center; color: #2c3e50; font-size: 2.2em; margin-top: 0;" x-cloak>🏃‍♂️ Biegam</h1>
-        
-        <div class="card" style="max-width: 800px; margin: 0 auto 20px auto;" x-show="!dataLoaded && !loading">
-            <p style="text-align: center; color: #666; font-size: 0.95em;">
-                Zaloguj się do Garmin Connect, aby wygenerować analizę.<br>
-                <small>(Hasło przetwarzane w pamięci RAM, brak zapisu na serwerze).</small>
-            </p>
-            <form @submit.prevent="fetchData">
-                <div class="grid-2">
-                    <div><label>Email Garmin</label><input type="email" x-model="email" placeholder="Email" required></div>
-                    <div><label>Hasło</label><input type="password" x-model="password" placeholder="Hasło" required></div>
-                </div>
-                <div class="grid-2" style="margin-top: 15px;">
-                    <div><label>Od kiedy analizować?</label><input type="date" x-model="startDate" required></div>
-                    <div><label>Do kiedy analizować?</label><input type="date" x-model="endDate" required></div>
-                </div>
-                <div class="grid-2" style="margin-top: 15px;">
-                    <div><label>Tętno spoczynkowe (puste = Auto):</label><input type="number" x-model="hrRest" placeholder="Wykryj automatycznie"></div>
-                    <div><label>Tętno maksymalne (puste = Auto):</label><input type="number" x-model="hrMax" placeholder="Wykryj automatycznie"></div>
-                </div>
-                <button type="submit">Generuj Dashboard</button>
-            </form>
-            <div x-show="error" style="background: #fee; color: #c00; padding: 10px; border-radius: 4px; margin-top: 15px;" x-text="error"></div>
-        </div>
+<div class="container" x-data="dashboard()">
+    <h1 x-show="!dataLoaded" style="text-align: center;">Analizator Formy Biegowej</h1>
+    <h1 x-show="dataLoaded" style="text-align: center; font-size: 2.2em; margin-top: 0;" x-cloak>🏃‍♂️ Biegam</h1>
 
-        <div class="card" x-show="loading" style="text-align: center; max-width: 800px; margin: 0 auto;" x-cloak>
-            <p>🔄 Pobieranie danych... Pierwsza analiza dłuższego zakresu może potrwać około minuty, kolejne idą z lokalnej bazy.</p>
-        </div>
-        
-        <div x-show="dataLoaded" x-cloak>
-            <div class="card" style="background: #e6f2ff; border-left: 4px solid #1f77b4; padding: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center;">
-                <span style="font-size: 0.9em;"><strong>Fizjologia:</strong> HR Rest <span x-text="debug.hr_rest"></span> | HR Max <span x-text="debug.hr_max"></span>
-                    | Zapytań do Garmina: <span x-text="sync.calls"></span>
-                    <template x-for="n in (sync.notes || [])"><span style="color:#b36b00;"> ⚠ <span x-text="n"></span></span></template></span>
-                <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold; font-size: 0.9em;">[ Wyloguj / Zamknij ]</a>
+    <div class="card" style="max-width: 800px; margin: 0 auto 20px auto;" x-show="!dataLoaded && !loading">
+        <p style="text-align: center; color: #666; font-size: 0.95em;">
+            Zaloguj się do Garmin Connect, aby wygenerować analizę.<br>
+            <small>Hasło nie jest zapisywane. Serwer trzyma tokeny Garmin i skrót hasła (do weryfikacji), żeby nie logować się do Garmina za każdym razem.</small>
+        </p>
+        <form @submit.prevent="fetchData">
+            <div class="grid-2">
+                <div><label>Email Garmin</label><input type="email" x-model="email" placeholder="Email" required></div>
+                <div><label>Hasło</label><input type="password" x-model="password" placeholder="Hasło" required></div>
             </div>
-
-            <!-- Górny rząd: Kompaktowa Workout Map po lewej i szerokie Endurance po prawej -->
-            <div class="top-grid">
-                <div class="card"><div id="chart-heatmap" class="plot-container" style="height: 420px;"></div></div>
-                <div class="card"><div id="chart-endurance" class="plot-container" style="height: 420px;"></div></div>
+            <div class="grid-2" style="margin-top: 15px;">
+                <div><label>Od kiedy analizować?</label><input type="date" x-model="startDate" required></div>
+                <div><label>Do kiedy analizować?</label><input type="date" x-model="endDate" required></div>
             </div>
-
-            <!-- Dolna siatka: 6 kafelków układających się równo w 2 lub 3 kolumnach -->
-            <div class="charts-grid">
-                <div class="card"><div id="chart-mmp" class="plot-container"></div></div>
-                <div class="card"><div id="chart-ef" class="plot-container"></div></div>
-                <div class="card"><div id="chart-biomech" class="plot-container"></div></div>
-                <div class="card"><div id="chart-pow" class="plot-container"></div></div>
-                <div class="card"><div id="chart-hr" class="plot-container"></div></div>
-                <div class="card"><div id="chart-pace" class="plot-container"></div></div>
+            <div class="grid-2" style="margin-top: 15px;">
+                <div><label>Tętno spoczynkowe (puste = Auto)</label><input type="number" x-model="hrRest" placeholder="Wykryj automatycznie"></div>
+                <div><label>Tętno maksymalne (puste = Auto)</label><input type="number" x-model="hrMax" placeholder="Wykryj automatycznie"></div>
             </div>
-        </div>
+            <div class="grid-2" style="margin-top: 15px;">
+                <div><label>Limit tętna od lekarza (opcjonalnie)</label><input type="number" x-model="hrCap" placeholder="np. 140"></div>
+                <div><label>Obwód talii w cm (opcjonalnie)</label><input type="number" step="0.5" x-model="waistCm" placeholder="np. 95"></div>
+            </div>
+            <button type="submit">Generuj Dashboard</button>
+        </form>
+        <div x-show="error" style="background: #fee; color: #c00; padding: 10px; border-radius: 4px; margin-top: 15px;" x-text="error"></div>
     </div>
 
-    <script>
-        document.addEventListener('alpine:init', () => {
-            const today = new Date();
-            const pastDate = new Date();
-            pastDate.setDate(today.getDate() - 90);
-            const formatDate = (date) => date.toISOString().split('T')[0];
+    <div class="card" x-show="loading" style="text-align: center; max-width: 800px; margin: 0 auto;" x-cloak>
+        <p>🔄 Pobieranie danych... Pierwsza analiza dłuższego zakresu może potrwać około minuty, kolejne idą z lokalnej bazy.</p>
+    </div>
 
-            Alpine.data('dashboard', () => ({
-                email: '', password: '', startDate: formatDate(pastDate), endDate: formatDate(today),
-                hrRest: '', hrMax: '', loading: false, dataLoaded: false, error: '', debug: {}, sync: {},
-                
-                async fetchData() {
-                    this.loading = true; this.error = '';
-                    const formData = new FormData();
-                    formData.append('email', this.email); formData.append('password', this.password);
-                    formData.append('start_date', this.startDate); formData.append('end_date', this.endDate);
-                    if (this.hrRest) formData.append('user_hr_rest', this.hrRest);
-                    if (this.hrMax) formData.append('user_hr_max', this.hrMax);
-                    
-                    try {
-                        const response = await fetch('/api/analyze', { method: 'POST', body: formData });
-                        if (!response.ok) {
-                            const contentType = response.headers.get("content-type");
-                            if (contentType && contentType.indexOf("application/json") !== -1) {
-                                const errData = await response.json();
-                                throw new Error(errData.detail || 'Wystąpił błąd podczas analizy.');
-                            } else {
-                                throw new Error(`Błąd serwera (HTTP ${response.status}).`);
-                            }
-                        }
-                        const data = await response.json();
-                        this.debug = data.debug;
-                        this.sync = data.sync || {};
-                        this.loading = false;
-                        this.dataLoaded = true;
-                        
-                        // PANCERNY FIX: Czekamy 100ms aż przeglądarka fizycznie rozrysuje CSS Grid, i dopiero wtedy liczymy szerokości dla Plotly
-                        setTimeout(() => {
-                            window.requestAnimationFrame(() => {
-                                this.drawCharts(data);
-                            });
-                        }, 100);
-                        
-                    } catch (e) {
-                        this.error = e.message;
-                        this.loading = false;
-                    } finally {
-                        this.password = ''; 
+    <div x-show="dataLoaded" x-cloak>
+        <div class="card" style="background: #e6f2ff; border-left: 4px solid #1f77b4; padding: 12px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap;">
+            <span style="font-size: 0.9em;"><strong>Fizjologia:</strong> HR Rest <span x-text="debug.hr_rest"></span> | HR Max <span x-text="debug.hr_max"></span>
+                <template x-if="k.hr_max_tanaka"><span> (wiekowe ok. <span x-text="k.hr_max_tanaka"></span>)</span></template>
+                | Zapytań do Garmina: <span x-text="sync.calls"></span>
+                <template x-for="n in (sync.notes || [])"><span style="color:#b36b00;"> ⚠ <span x-text="n"></span></span></template></span>
+            <a href="#" @click.prevent="reset()" style="color: #d62728; text-decoration: none; font-weight: bold; font-size: 0.9em;">[ Wyloguj / Zamknij ]</a>
+        </div>
+
+        <!-- KAFELKI -->
+        <div class="kpi-grid">
+            <div class="card kpi">
+                <h3>Prognoza 10 km</h3>
+                <div class="big" x-text="k.own_10k || '—'"></div>
+                <div class="sub"><template x-if="k.pace_10k"><span><span x-text="k.pace_10k"></span> min/km · </span></template>Garmin: <b x-text="k.garmin_10k || '—'"></b></div>
+            </div>
+            <div class="card kpi">
+                <h3>Prognoza półmaratonu</h3>
+                <div class="big" x-text="k.own_hm || '—'"></div>
+                <div class="sub"><template x-if="k.pace_hm"><span><span x-text="k.pace_hm"></span> min/km · </span></template>Garmin: <b x-text="k.garmin_hm || '—'"></b></div>
+            </div>
+            <div class="card kpi">
+                <h3>VO₂max (własny VDOT)</h3>
+                <div class="big"><span x-text="k.vdot ?? '—'"></span>
+                    <span class="unit" :class="k.vdot_delta_28d > 0 ? 'up' : (k.vdot_delta_28d < 0 ? 'down' : '')"
+                          x-show="k.vdot_delta_28d != null" x-text="sign(k.vdot_delta_28d) + ' / 4 tyg.'"></span></div>
+                <div class="sub">Garmin: <b x-text="k.vo2_garmin ?? '—'"></b></div>
+            </div>
+            <div class="card kpi" :class="k.pace_ref_delta_s_28d < 0 ? 'good' : ''">
+                <h3>Tempo przy <span x-text="k.hr_ref"></span> bpm</h3>
+                <div class="big"><span x-text="k.pace_ref || '—'"></span> <span class="unit">min/km</span></div>
+                <div class="sub" x-show="k.pace_ref_delta_s_28d != null">
+                    <span :class="k.pace_ref_delta_s_28d < 0 ? 'up' : (k.pace_ref_delta_s_28d > 0 ? 'down' : '')"
+                          x-text="(k.pace_ref_delta_s_28d < 0 ? 'szybciej o ' : (k.pace_ref_delta_s_28d > 0 ? 'wolniej o ' : 'bez zmian ')) + (k.pace_ref_delta_s_28d ? Math.abs(k.pace_ref_delta_s_28d) + ' s/km' : '')"></span> niż 4 tyg. temu
+                </div>
+            </div>
+            <div class="card kpi" :class="loadClass()">
+                <h3>Obciążenie</h3>
+                <div class="big"><span x-text="k.ctl ?? '—'"></span> <span class="unit">CTL</span></div>
+                <div class="sub">Forma (TSB): <b x-text="sign(k.tsb)"></b> — <span x-text="tsbText()"></span><br>
+                    Przyrost CTL: <b x-text="sign(k.ramp)"></b>/tydz.<span x-show="k.ramp > 5" class="down"> — za szybko</span></div>
+            </div>
+            <div class="card kpi" :class="k.rhr_alert ? 'alert' : ''">
+                <h3>Tętno spoczynkowe</h3>
+                <div class="big"><span x-text="k.rhr_7d ?? '—'"></span> <span class="unit">7 dni</span></div>
+                <div class="sub">Norma 60 dni: <b x-text="k.rhr_60d ?? '—'"></b>
+                    <span x-show="k.rhr_alert" class="down"><br>⚠ Ostatnie 3 dni: <span x-text="k.rhr_3d"></span> — o 5+ powyżej normy. Odpuść intensywność.</span></div>
+            </div>
+            <div class="card kpi" :class="bmiClass()" x-show="k.weight">
+                <h3>Waga i BMI</h3>
+                <div class="big"><span x-text="k.weight"></span> <span class="unit">kg</span>
+                    <span class="unit" :class="k.weight_rate < 0 ? 'up' : 'down'" x-show="k.weight_rate != null" x-text="sign(k.weight_rate) + ' kg/tydz.'"></span></div>
+                <div class="sub" x-show="k.bmi">BMI <b x-text="k.bmi"></b> (cel <span x-text="k.bmi_band && k.bmi_band.join('–')"></span>)
+                    <template x-if="k.target_kg"><span><br>Do celu: <b x-text="k.target_kg"></b> kg<span x-show="k.target_eta_weeks"> · ok. <span x-text="k.target_eta_weeks"></span> tyg.</span></span></template>
+                    <span x-show="k.weight_rate < 0 && k.muscle_rate < 0" class="down"><br>⚠ Spada też masa mięśniowa</span>
+                    <template x-if="k.body_fat"><span><br>Tkanka tłuszczowa: <span x-text="k.body_fat"></span>%</span></template>
+                </div>
+                <div class="sub" x-show="!k.bmi" style="color:#999;">Brak wzrostu w profilu Garmin – BMI niedostępne.</div>
+            </div>
+            <template x-if="k.waist">
+                <div class="card kpi" :class="k.waist.risk === 'ok' ? 'good' : (k.waist.risk === 'wysokie' ? 'alert' : 'warn')">
+                    <h3>Obwód talii</h3>
+                    <div class="big"><span x-text="k.waist.waist_cm"></span> <span class="unit">cm</span></div>
+                    <div class="sub">Ryzyko: <b x-text="k.waist.risk"></b><span x-show="k.waist.whtr"> · talia/wzrost <b x-text="k.waist.whtr"></b></span><br><small x-text="k.waist.thresholds"></small></div>
+                </div>
+            </template>
+            <template x-if="k.hr_cap">
+                <div class="card kpi" :class="k.hr_cap.over ? 'alert' : 'good'">
+                    <h3>Limit tętna <span x-text="k.hr_cap.cap"></span></h3>
+                    <div class="big"><span x-text="k.hr_cap.over"></span> <span class="unit">z <span x-text="k.hr_cap.runs"></span> biegów ponad limit</span></div>
+                    <div class="sub">Najwyższe tętno: <b x-text="k.hr_cap.max_seen"></b><span x-show="k.hr_cap.last_over"> · ostatnio <span x-text="k.hr_cap.last_over"></span></span></div>
+                </div>
+            </template>
+        </div>
+
+        <div class="top-grid">
+            <div class="card"><div id="chart-heatmap" class="plot-container" style="height: 420px;"></div></div>
+            <div class="card"><div id="chart-endurance" class="plot-container" style="height: 420px;"></div></div>
+        </div>
+
+        <div class="charts-grid">
+            <div class="card"><div id="chart-pred" class="plot-container"></div></div>
+            <div class="card"><div id="chart-vo2" class="plot-container"></div></div>
+            <div class="card"><div id="chart-pace-ref" class="plot-container"></div></div>
+            <div class="card"><div id="chart-ef" class="plot-container"></div></div>
+            <div class="card"><div id="chart-rhr" class="plot-container"></div></div>
+            <div class="card"><div id="chart-weight" class="plot-container"></div></div>
+            <div class="card" x-show="k.hr_cap"><div id="chart-cap" class="plot-container"></div></div>
+        </div>
+
+        <details class="more" @toggle="if ($event.target.open) $nextTick(() => drawExtra())">
+            <summary>Więcej wykresów: moc, krzywa MMP, biomechanika</summary>
+            <div class="charts-grid">
+                <div class="card"><div id="chart-mmp" class="plot-container"></div></div>
+                <div class="card"><div id="chart-pow" class="plot-container"></div></div>
+                <div class="card"><div id="chart-biomech" class="plot-container"></div></div>
+            </div>
+        </details>
+
+        <p class="note">
+            Prognozy własne: VO₂max szacowane z każdego równego biegu ≥20 min (koszt tlenowy tempa wg Danielsa / %HRR),
+            mediana z 6 tygodni, czasy z tablic VDOT. Zakładają start na maksymalny wysiłek – przy ograniczeniach kardiologicznych
+            traktuj je jako miarę formy, nie cel do pobiegnięcia. Beta-blokery zaniżają tętno i zawyżają szacunki oparte na HR.
+            Cel BMI: WHO 18,5–24,9; dla 65+ przyjęto 23–27. To nie jest porada medyczna.
+        </p>
+    </div>
+</div>
+
+<script>
+const CHART_IDS = ['chart-heatmap', 'chart-endurance', 'chart-pred', 'chart-vo2', 'chart-pace-ref', 'chart-ef',
+                   'chart-rhr', 'chart-weight', 'chart-cap', 'chart-mmp', 'chart-pow', 'chart-biomech'];
+const STORE_KEY = 'biegam.form';
+
+const fmtMin = (m) => {
+    if (m == null || !isFinite(m)) return '';
+    const s = Math.round(m * 60), h = Math.floor(s / 3600), mm = Math.floor(s % 3600 / 60), ss = s % 60;
+    return h ? `${h}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}` : `${mm}:${String(ss).padStart(2, '0')}`;
+};
+
+document.addEventListener('alpine:init', () => {
+    const today = new Date();
+    const pastDate = new Date();
+    pastDate.setDate(today.getDate() - 90);
+    const formatDate = (date) => date.toISOString().split('T')[0];
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); } catch (e) { saved = {}; }
+
+    Alpine.data('dashboard', () => ({
+        email: saved.email || '', password: '', startDate: formatDate(pastDate), endDate: formatDate(today),
+        hrRest: saved.hrRest || '', hrMax: saved.hrMax || '', hrCap: saved.hrCap || '', waistCm: saved.waistCm || '',
+        loading: false, dataLoaded: false, error: '', debug: {}, sync: {}, k: {}, data: null, extraDrawn: false,
+
+        sign(v) { return v == null ? '—' : (v > 0 ? '+' : '') + v; },
+        tsbText() {
+            const t = this.k.tsb;
+            if (t == null) return '';
+            if (t < -25) return 'duże zmęczenie';
+            if (t < -10) return 'budowanie formy';
+            if (t <= 5) return 'neutralnie';
+            return 'świeżość';
+        },
+        loadClass() { return (this.k.tsb < -25 || this.k.ramp > 5) ? 'warn' : ''; },
+        bmiClass() {
+            const b = this.k.bmi, band = this.k.bmi_band;
+            if (!b || !band) return '';
+            return (b >= band[0] && b <= band[1]) ? 'good' : 'warn';
+        },
+
+        async fetchData() {
+            this.loading = true; this.error = '';
+            try { localStorage.setItem(STORE_KEY, JSON.stringify({ email: this.email, hrRest: this.hrRest, hrMax: this.hrMax, hrCap: this.hrCap, waistCm: this.waistCm })); } catch (e) {}
+            const formData = new FormData();
+            formData.append('email', this.email); formData.append('password', this.password);
+            formData.append('start_date', this.startDate); formData.append('end_date', this.endDate);
+            if (this.hrRest) formData.append('user_hr_rest', this.hrRest);
+            if (this.hrMax) formData.append('user_hr_max', this.hrMax);
+            if (this.hrCap) formData.append('hr_cap', this.hrCap);
+            if (this.waistCm) formData.append('waist_cm', this.waistCm);
+
+            try {
+                const response = await fetch('/api/analyze', { method: 'POST', body: formData });
+                if (!response.ok) {
+                    const contentType = response.headers.get("content-type");
+                    if (contentType && contentType.indexOf("application/json") !== -1) {
+                        const errData = await response.json();
+                        throw new Error(errData.detail || 'Wystąpił błąd podczas analizy.');
                     }
-                },
-                
-                drawCharts(data) {
-                    const plotConf = { responsive: true, displayModeBar: false }; 
-                    
-                    // Legenda na górze, po lewej stronie pod tytułem (nie zostanie ucięta z prawej)
-                    const topLegend = { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'left', x: 0, font: {size: 11} };
-
-                    // Funkcja pomocnicza, która mierzy realną szerokość kafelka w pikselach i wymusza ją na Plotly
-                    const renderPlot = (id, traces, layout) => {
-                        const el = document.getElementById(id);
-                        if (!el) return;
-                        layout.width = el.clientWidth;
-                        layout.height = el.clientHeight;
-                        Plotly.newPlot(el, traces, layout, plotConf);
-                    };
-
-                    const addTrend = (metricKey) => {
-                        const tr = data.trends[metricKey];
-                        if (!tr || tr.hist_dates.length === 0) return [];
-                        return [
-                            { x: tr.hist_dates, y: tr.hist_vals, mode: 'lines', name: 'Trend', line: {color: '#d62728', width: 2.5}, hoverinfo: 'skip' },
-                            { x: tr.fut_dates, y: tr.fut_vals, mode: 'lines', name: 'Prognoza', line: {color: '#d62728', width: 2.5, dash: 'dot'}, hoverinfo: 'skip' }
-                        ];
-                    };
-
-                    // 0. WORKOUT MAP
-                    renderPlot('chart-heatmap', [{
-                        z: data.hm_z, x: data.hm_x, y: data.hm_y, type: 'heatmap',
-                        colorscale: [ [0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966'] ],
-                        hoverongaps: false, xgap: 3, ygap: 3, showscale: false, hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
-                    }], { 
-                        title: { text: 'Workout map', x: 0 },
-                        yaxis: { autorange: 'reversed', fixedrange: true }, 
-                        xaxis: { fixedrange: true }, 
-                        margin: { t: 60, b: 40, l: 40, r: 10 }
-                    });
-
-                    // 1. ENDURANCE SCORE & TE
-                    const traceCTL = { x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (Baza)', line: {color: '#0052cc', width: 2.5} };
-                    const traceATL = { x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (Zmęczenie)', line: {color: '#2c3e50', dash: 'dot', width: 2} };
-                    const todayStr = new Date().toISOString().split('T')[0];
-                    
-                    let endData = [traceCTL, traceATL];
-                    if (data.ae && data.ae.length > 0) {
-                        const traceAe = { 
-                            x: data.dates, y: data.ae, type: 'bar', name: 'TE Tlen', yaxis: 'y2', 
-                            marker: {color: 'rgba(52, 152, 219, 0.55)'}, hovertemplate: 'TE Tlen: %{y}<extra></extra>' 
-                        };
-                        const traceAn = { 
-                            x: data.dates, y: data.an, type: 'bar', name: 'TE Beztlen', yaxis: 'y2', 
-                            marker: {color: 'rgba(255, 0, 51, 0.85)'}, hovertemplate: 'TE Beztlen: %{y}<extra></extra>' 
-                        };
-                        endData = [traceAe, traceAn, traceCTL, traceATL];
-                    }
-
-                    renderPlot('chart-endurance', endData, { 
-                        title: { text: 'Endurance Score & Training Effect', x: 0 },
-                        hovermode: 'x unified', barmode: 'stack',
-                        legend: topLegend,
-                        yaxis: { title: 'TRIMP' },
-                        yaxis2: { title: 'Training Effect', overlaying: 'y', side: 'right', range: [0, 10], showgrid: false },
-                        shapes: [{ type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} }], 
-                        margin: { t: 75, b: 40, l: 45, r: 45 }
-                    });
-
-                    // 2. MMP
-                    renderPlot('chart-mmp', [{
-                        x: data.mmp_labels, y: data.mmp_vals, mode: 'lines+markers', name: 'Max Power',
-                        line: {color: '#d62728', width: 3, shape: 'spline'}, marker: {size: 10, color: '#1f77b4'}, hovertemplate: 'Czas: %{x}<br>Max Moc: %{y} W<extra></extra>'
-                    }], { 
-                        title: { text: 'Krzywa Mocy MMP (Top 5)', x: 0 }, 
-                        yaxis: { title: 'Moc (W)' }, 
-                        margin: { t: 60, b: 40, l: 45, r: 15 } 
-                    });
-
-                    // 3. EF vs HRV
-                    const bandX = []; const bandU = []; const bandL = [];
-                    data.dates.forEach((d, i) => { if (data.hrv_upper[i] !== null) { bandX.push(d); bandU.push(data.hrv_upper[i]); bandL.push(data.hrv_lower[i]); } });
-                    renderPlot('chart-ef', [
-                        { x: bandX.concat(bandX.slice().reverse()), y: bandU.concat(bandL.slice().reverse()), fill: 'toself', fillcolor: 'rgba(44, 160, 44, 0.15)', line: {color: 'transparent'}, name: 'Norma', yaxis: 'y2', type: 'scatter', hoverinfo: 'skip' },
-                        { x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (7d)', line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2' },
-                        { x: data.dates, y: data.ef, mode: 'markers', name: 'EF', marker: {color: '#ff7f0e', size: 7} }, ...addTrend('ef')
-                    ], { 
-                        title: { text: 'Współczynnik EF vs HRV', x: 0 }, 
-                        legend: topLegend,
-                        yaxis: { title: 'EF' }, 
-                        yaxis2: { title: 'HRV (ms)', overlaying: 'y', side: 'right', showgrid: false }, 
-                        hovermode: 'x unified', 
-                        margin: { t: 75, b: 40, l: 45, r: 45 } 
-                    });
-
-                    // 4. BIOMECHANIKA W CZASIE
-                    const vBiomech = [];
-                    data.dates.forEach((d, i) => { if (data.vo[i] && data.gct[i] && data.pace[i]) vBiomech.push({date: d, pace: data.pace[i], pace_str: data.pace_str[i], vo: data.vo[i], gct: data.gct[i]}); });
-                    if (vBiomech.length > 0) {
-                        renderPlot('chart-biomech', [{
-                            x: vBiomech.map(v => v.date), y: vBiomech.map(v => v.pace), mode: 'markers', name: 'Biomechanika',
-                            text: vBiomech.map(v => `Data: ${v.date}<br>Tempo: ${v.pace_str} min/km<br>VO (rozmiar): ${v.vo.toFixed(1)} cm<br>GCT (kolor): ${v.gct.toFixed(0)} ms`), hovertemplate: '%{text}<extra></extra>',
-                            marker: {
-                                size: vBiomech.map(v => v.vo * 2.0), sizemode: 'diameter',
-                                color: vBiomech.map(v => v.gct), colorscale: 'Viridis', showscale: true, 
-                                colorbar: { title: 'GCT', thickness: 10, len: 0.85, x: 1.02 }
-                            }
-                        }], { 
-                            title: { text: 'Biomechanika: Postęp w czasie', x: 0 }, 
-                            xaxis: { title: 'Data' }, yaxis: { title: 'Tempo (min/km)', autorange: 'reversed' }, 
-                            margin: { t: 60, b: 40, l: 45, r: 50 } 
-                        });
-                    } else {
-                        document.getElementById('chart-biomech').innerHTML = '<p style="text-align:center; padding-top:150px; color:#999;">Brak danych z dynamiki biegu</p>';
-                    }
-
-                    // 5. ŚREDNIA MOC
-                    renderPlot('chart-pow', [{ x: data.dates, y: data.pow, mode: 'markers', name: 'Moc', marker: {color: '#1f77b4', size: 7} }, ...addTrend('pow')], { 
-                        title: { text: 'Średnia Moc (W)', x: 0 }, legend: topLegend, margin: { t: 75, b: 40, l: 45, r: 15 } 
-                    });
-
-                    // 6. ŚREDNIE TĘTNO
-                    renderPlot('chart-hr', [{ x: data.dates, y: data.hr, mode: 'markers', name: 'HR', marker: {color: '#2ca02c', size: 7} }, ...addTrend('hr')], { 
-                        title: { text: 'Średnie Tętno (BPM)', x: 0 }, legend: topLegend, margin: { t: 75, b: 40, l: 45, r: 15 } 
-                    });
-
-                    // 7. ŚREDNIE TEMPO
-                    renderPlot('chart-pace', [{ x: data.dates, y: data.pace, mode: 'markers', name: 'Tempo', marker: {color: '#9467bd', size: 7}, text: data.pace_str, hovertemplate: 'Tempo: %{text} min/km<extra></extra>' }, ...addTrend('pace')], { 
-                        title: { text: 'Średnie Tempo (min/km)', x: 0 }, legend: topLegend, yaxis: { autorange: 'reversed' }, margin: { t: 75, b: 40, l: 45, r: 15 } 
-                    });
-
-                    // Jeden listener na cały cykl życia strony (wcześniej każde rysowanie dokładało kolejny)
-                    if (!this._onResize) {
-                        this._onResize = () => {
-                            ['chart-heatmap', 'chart-endurance', 'chart-mmp', 'chart-biomech', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => {
-                                const el = document.getElementById(id);
-                                if (el && el.data) {
-                                    Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
-                                }
-                            });
-                        };
-                        window.addEventListener('resize', this._onResize);
-                    }
-                },
-
-                reset() {
-                    if (this._onResize) { window.removeEventListener('resize', this._onResize); this._onResize = null; }
-                    this.dataLoaded = false;
-                    ['chart-heatmap', 'chart-endurance', 'chart-mmp', 'chart-biomech', 'chart-ef', 'chart-pow', 'chart-hr', 'chart-pace'].forEach(id => Plotly.purge(id));
+                    throw new Error(`Błąd serwera (HTTP ${response.status}).`);
                 }
-            }))
-        })
-    </script>
+                const data = await response.json();
+                this.data = data; this.debug = data.debug; this.sync = data.sync || {}; this.k = data.kpi || {};
+                this.extraDrawn = false;
+                this.loading = false;
+                this.dataLoaded = true;
+                // Czekamy, aż przeglądarka rozrysuje CSS Grid, i dopiero wtedy mierzymy szerokości dla Plotly
+                setTimeout(() => window.requestAnimationFrame(() => this.drawCharts(data)), 100);
+            } catch (e) {
+                this.error = e.message;
+                this.loading = false;
+            } finally {
+                this.password = '';
+            }
+        },
+
+        renderPlot(id, traces, layout) {
+            const el = document.getElementById(id);
+            if (!el || !el.clientWidth) return;
+            layout.width = el.clientWidth;
+            layout.height = el.clientHeight;
+            Plotly.newPlot(el, traces, layout, { responsive: true, displayModeBar: false });
+        },
+
+        empty(id, text) {
+            const el = document.getElementById(id);
+            if (el) el.innerHTML = `<p style="text-align:center; padding-top:150px; color:#999;">${text}</p>`;
+        },
+
+        drawCharts(data) {
+            const topLegend = { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'left', x: 0, font: {size: 11} };
+            const todayStr = new Date().toISOString().split('T')[0];
+            const todayLine = { type: 'line', x0: todayStr, x1: todayStr, y0: 0, y1: 1, yref: 'paper', line: {color: 'black', dash: 'dot'} };
+            const F = data.fitness || {}, H = data.health || {};
+
+            // WORKOUT MAP
+            this.renderPlot('chart-heatmap', [{
+                z: data.hm_z, x: data.hm_x, y: data.hm_y, type: 'heatmap',
+                colorscale: [[0, '#ebedf0'], [0.01, '#cce5ff'], [0.4, '#66b2ff'], [0.7, '#0066cc'], [1.0, '#002966']],
+                hoverongaps: false, xgap: 3, ygap: 3, showscale: false, hovertemplate: 'Od: %{x}<br>Dzień: %{y}<br>TRIMP: %{z:.0f}<extra></extra>'
+            }], { title: { text: 'Workout map', x: 0 }, yaxis: { autorange: 'reversed', fixedrange: true }, xaxis: { fixedrange: true }, margin: { t: 60, b: 40, l: 40, r: 10 } });
+
+            // OBCIĄŻENIE: CTL / ATL / TSB + Training Effect
+            const endData = [];
+            if (data.ae && data.ae.some(v => v)) {
+                endData.push({ x: data.dates, y: data.ae, type: 'bar', name: 'TE Tlen', yaxis: 'y2', marker: {color: 'rgba(52, 152, 219, 0.45)'}, hovertemplate: 'TE Tlen: %{y}<extra></extra>' });
+                endData.push({ x: data.dates, y: data.an, type: 'bar', name: 'TE Beztlen', yaxis: 'y2', marker: {color: 'rgba(255, 0, 51, 0.75)'}, hovertemplate: 'TE Beztlen: %{y}<extra></extra>' });
+            }
+            endData.push({ x: data.dates, y: data.ctl, mode: 'lines', name: 'CTL (baza)', line: {color: '#0052cc', width: 2.5} });
+            endData.push({ x: data.dates, y: data.atl, mode: 'lines', name: 'ATL (zmęczenie)', line: {color: '#2c3e50', dash: 'dot', width: 2} });
+            endData.push({ x: data.dates, y: data.tsb, mode: 'lines', name: 'TSB (forma)', line: {color: '#2ca02c', width: 1.5}, fill: 'tozeroy', fillcolor: 'rgba(44,160,44,0.08)' });
+            this.renderPlot('chart-endurance', endData, {
+                title: { text: 'Obciążenie i forma (CTL / ATL / TSB)', x: 0 }, hovermode: 'x unified', barmode: 'stack', legend: topLegend,
+                yaxis: { title: 'TRIMP / dzień' }, yaxis2: { title: 'Training Effect', overlaying: 'y', side: 'right', range: [0, 10], showgrid: false },
+                shapes: [todayLine], margin: { t: 75, b: 40, l: 45, r: 45 }
+            });
+
+            // PROGNOZY 10 km / HM
+            const predTr = [];
+            // dwa panele: 10 km (góra, oś y) i półmaraton (dół, oś y2) – każdy ze swoją skalą
+            const timeTrace = (x, y, name, color, dash, yaxis) => ({ x, y, name, yaxis, mode: 'lines', line: {color, width: 2.5, dash}, customdata: y.map(fmtMin), hovertemplate: name + ': %{customdata}<extra></extra>' });
+            if (F.own_10k && F.own_10k.some(v => v)) {
+                predTr.push(timeTrace(F.trend_dates, F.own_10k, '10 km (własna)', '#1f77b4', 'solid', 'y'));
+                predTr.push(timeTrace(F.trend_dates, F.own_hm, 'HM (własna)', '#9467bd', 'solid', 'y2'));
+            }
+            if (F.garmin_10k && F.garmin_10k.length) {
+                predTr.push(timeTrace(F.pred_dates, F.garmin_10k, '10 km (Garmin)', '#1f77b4', 'dot', 'y'));
+                predTr.push(timeTrace(F.pred_dates, F.garmin_hm, 'HM (Garmin)', '#9467bd', 'dot', 'y2'));
+            }
+            if (predTr.length) {
+                const axis = (ax) => {
+                    const v = predTr.filter(t => t.yaxis === ax).flatMap(t => t.y).filter(x => x);
+                    if (!v.length) return {};
+                    const span = Math.max(...v) - Math.min(...v);
+                    const step = [1, 2, 5, 10, 15, 30].find(s => span / s <= 4) || 30;
+                    const lo = Math.floor(Math.min(...v) / step) * step - step, hi = Math.ceil(Math.max(...v) / step) * step + step;
+                    const ticks = []; for (let t = lo; t <= hi; t += step) ticks.push(t);
+                    return { range: [hi, lo], tickvals: ticks, ticktext: ticks.map(fmtMin) };
+                };
+                this.renderPlot('chart-pred', predTr, {
+                    title: { text: 'Prognoza 10 km i półmaratonu', x: 0 }, legend: topLegend, hovermode: 'x unified',
+                    yaxis: { title: '10 km', domain: [0.6, 1], ...axis('y') },
+                    yaxis2: { title: 'półmaraton', domain: [0, 0.4], anchor: 'x', ...axis('y2') },
+                    margin: { t: 75, b: 40, l: 65, r: 15 }
+                });
+            } else this.empty('chart-pred', 'Za mało równych biegów ≥20 min z tętnem');
+
+            // VO2max
+            const vo2Tr = [
+                { x: F.run_dates, y: F.vdot_run, mode: 'markers', name: 'Szacunek z biegu', marker: {color: 'rgba(31,119,180,0.35)', size: 6} },
+                { x: F.trend_dates, y: F.vdot_trend, mode: 'lines', name: 'VDOT (mediana 6 tyg.)', line: {color: '#1f77b4', width: 3} },
+            ];
+            if (F.vo2_garmin_run && F.vo2_garmin_run.some(v => v))
+                vo2Tr.push({ x: F.run_dates, y: F.vo2_garmin_run, mode: 'lines', line: {shape: 'hv', color: '#ff7f0e', width: 2}, name: 'VO₂max Garmin', connectgaps: true });
+            this.renderPlot('chart-vo2', vo2Tr, { title: { text: 'VO₂max: własny VDOT vs Garmin', x: 0 }, legend: topLegend, yaxis: { title: 'ml/kg/min' }, margin: { t: 75, b: 40, l: 45, r: 15 } });
+
+            // TEMPO PRZY HR
+            const paceTxt = (arr) => arr.map(v => v ? fmtMin(v) : '');
+            this.renderPlot('chart-pace-ref', [
+                { x: F.run_dates, y: F.pace_ref_run, mode: 'markers', name: 'Bieg', marker: {color: 'rgba(148,103,189,0.4)', size: 7}, customdata: paceTxt(F.pace_ref_run), hovertemplate: '%{x}: %{customdata} min/km<extra></extra>' },
+                { x: F.ref_dates, y: F.pace_ref_trend, mode: 'lines', name: 'Trend (2 tyg.)', line: {color: '#9467bd', width: 3}, customdata: paceTxt(F.pace_ref_trend), hovertemplate: 'Trend: %{customdata} min/km<extra></extra>' },
+            ], {
+                title: { text: `Tempo przy ${F.hr_ref} bpm – wydolność tlenowa`, x: 0 }, legend: topLegend,
+                yaxis: { title: 'min/km', autorange: 'reversed', ...this.paceTicks(F.pace_ref_run.concat(F.pace_ref_trend)) }, margin: { t: 75, b: 40, l: 50, r: 15 }
+            });
+
+            // EF vs HRV
+            const bandX = [], bandU = [], bandL = [];
+            data.dates.forEach((d, i) => { if (data.hrv_upper[i] != null) { bandX.push(d); bandU.push(data.hrv_upper[i]); bandL.push(data.hrv_lower[i]); } });
+            this.renderPlot('chart-ef', [
+                { x: bandX.concat(bandX.slice().reverse()), y: bandU.concat(bandL.slice().reverse()), fill: 'toself', fillcolor: 'rgba(44, 160, 44, 0.15)', line: {color: 'transparent'}, name: 'Norma HRV', yaxis: 'y2', type: 'scatter', hoverinfo: 'skip' },
+                { x: data.dates, y: data.hrv_7d, mode: 'lines', name: 'HRV (7d)', line: {color: '#2ca02c', width: 2.5}, yaxis: 'y2' },
+                { x: data.dates, y: data.ef, mode: 'markers', name: 'EF (moc/HR)', marker: {color: '#ff7f0e', size: 7} }, ...this.trend(data, 'ef')
+            ], {
+                title: { text: 'Efektywność (EF) vs HRV', x: 0 }, legend: topLegend, yaxis: { title: 'EF' },
+                yaxis2: { title: 'HRV (ms)', overlaying: 'y', side: 'right', showgrid: false }, hovermode: 'x unified', margin: { t: 75, b: 40, l: 45, r: 45 }
+            });
+
+            // TĘTNO SPOCZYNKOWE
+            if (H.rhr_dates && H.rhr_dates.length) {
+                this.renderPlot('chart-rhr', [
+                    { x: H.rhr_dates, y: H.rhr, mode: 'markers', name: 'Dzień', marker: {color: 'rgba(214,39,40,0.35)', size: 5} },
+                    { x: H.rhr_dates, y: H.rhr_7d, mode: 'lines', name: 'Średnia 7 dni', line: {color: '#d62728', width: 2.5} },
+                    { x: H.rhr_dates, y: H.rhr_60d, mode: 'lines', name: 'Norma 60 dni', line: {color: '#7f7f7f', width: 2, dash: 'dash'} },
+                ], { title: { text: 'Tętno spoczynkowe', x: 0 }, legend: topLegend, hovermode: 'x unified', yaxis: { title: 'bpm' }, margin: { t: 75, b: 40, l: 45, r: 15 } });
+            } else this.empty('chart-rhr', 'Brak danych o tętnie spoczynkowym');
+
+            // WAGA
+            if (H.w_dates && H.w_dates.length) {
+                const shapes = H.band_kg ? [{ type: 'rect', xref: 'paper', x0: 0, x1: 1, y0: H.band_kg[0], y1: H.band_kg[1], fillcolor: 'rgba(44,160,44,0.10)', line: {width: 0} }] : [];
+                const wTr = [
+                    { x: H.w_dates, y: H.weight, mode: 'markers', name: 'Ważenie', marker: {color: 'rgba(44,62,80,0.35)', size: 6} },
+                    { x: H.weight_trend_dates, y: H.weight_trend, mode: 'lines', name: 'Trend', line: {color: '#2c3e50', width: 3} },
+                ];
+                if (H.band_kg) wTr.push({ x: [null], y: [null], mode: 'lines', line: {color: 'rgba(44,160,44,0.4)', width: 10}, name: `Prawidłowe BMI: ${H.band_kg[0]}–${H.band_kg[1]} kg` });
+                const ys = H.weight.filter(v => v).concat(H.band_kg ? [H.band_kg[1]] : []);
+                this.renderPlot('chart-weight', wTr, {
+                    title: { text: 'Waga i cel', x: 0 }, legend: topLegend, hovermode: 'x unified', shapes,
+                    yaxis: { title: 'kg', range: [Math.min(...ys) - 2, Math.max(...ys) + 2] }, margin: { t: 75, b: 40, l: 45, r: 15 }
+                });
+            } else this.empty('chart-weight', 'Brak ważeń w Garmin Connect');
+
+            // LIMIT TĘTNA
+            if (this.k.hr_cap && F.max_hr_run.length) {
+                const cap = this.k.hr_cap.cap;
+                this.renderPlot('chart-cap', [
+                    { x: F.run_dates, y: F.max_hr_run, mode: 'markers', name: 'Max HR biegu', marker: {size: 8, color: F.max_hr_run.map(v => v > cap ? '#d62728' : '#2ca02c')} },
+                    { x: F.run_dates, y: F.avg_hr_run, mode: 'markers', name: 'Średnie HR', marker: {size: 6, color: 'rgba(127,127,127,0.5)'} },
+                ], {
+                    title: { text: `Tętno na biegach vs limit ${cap}`, x: 0 }, legend: topLegend, yaxis: { title: 'bpm' },
+                    shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: cap, y1: cap, line: {color: '#d62728', dash: 'dash'} }],
+                    margin: { t: 75, b: 40, l: 45, r: 15 }
+                });
+            }
+
+            if (!this._onResize) {
+                this._onResize = () => CHART_IDS.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el && el.data && el.clientWidth) Plotly.relayout(el, { width: el.clientWidth, height: el.clientHeight });
+                });
+                window.addEventListener('resize', this._onResize);
+            }
+        },
+
+        paceTicks(values) {
+            const v = values.filter(x => x && isFinite(x));
+            if (!v.length) return {};
+            const lo = Math.floor(Math.min(...v) * 4) / 4, hi = Math.ceil(Math.max(...v) * 4) / 4;
+            const step = (hi - lo) > 3 ? 0.5 : 0.25, ticks = [];
+            for (let t = lo; t <= hi + 1e-9; t += step) ticks.push(t);
+            return { tickvals: ticks, ticktext: ticks.map(fmtMin) };
+        },
+
+        trend(data, key) {
+            const tr = data.trends[key];
+            if (!tr || tr.hist_dates.length === 0) return [];
+            return [
+                { x: tr.hist_dates, y: tr.hist_vals, mode: 'lines', name: 'Trend', line: {color: '#d62728', width: 2.5}, hoverinfo: 'skip' },
+                { x: tr.fut_dates, y: tr.fut_vals, mode: 'lines', name: 'Prognoza', line: {color: '#d62728', width: 2.5, dash: 'dot'}, hoverinfo: 'skip' }
+            ];
+        },
+
+        drawExtra() {
+            const data = this.data;
+            if (!data || this.extraDrawn) return;
+            this.extraDrawn = true;
+            const topLegend = { orientation: 'h', yanchor: 'bottom', y: 1.02, xanchor: 'left', x: 0, font: {size: 11} };
+
+            this.renderPlot('chart-mmp', [{
+                x: data.mmp_labels, y: data.mmp_vals, mode: 'lines+markers', name: 'Max moc',
+                line: {color: '#d62728', width: 3, shape: 'spline'}, marker: {size: 10, color: '#1f77b4'}, hovertemplate: 'Czas: %{x}<br>Max moc: %{y} W<extra></extra>'
+            }], { title: { text: 'Krzywa mocy MMP (5 najcięższych biegów)', x: 0 }, yaxis: { title: 'Moc (W)' }, margin: { t: 60, b: 40, l: 45, r: 15 } });
+
+            this.renderPlot('chart-pow', [{ x: data.dates, y: data.pow, mode: 'markers', name: 'Moc', marker: {color: '#1f77b4', size: 7} }, ...this.trend(data, 'pow')],
+                { title: { text: 'Średnia moc (W)', x: 0 }, legend: topLegend, margin: { t: 75, b: 40, l: 45, r: 15 } });
+
+            const vB = [];
+            data.dates.forEach((d, i) => { if (data.vo[i] && data.gct[i] && data.pace[i]) vB.push({date: d, pace: data.pace[i], pace_str: data.pace_str[i], vo: data.vo[i], gct: data.gct[i]}); });
+            if (vB.length) {
+                this.renderPlot('chart-biomech', [{
+                    x: vB.map(v => v.date), y: vB.map(v => v.pace), mode: 'markers', name: 'Biomechanika',
+                    text: vB.map(v => `Data: ${v.date}<br>Tempo: ${v.pace_str} min/km<br>VO (rozmiar): ${v.vo.toFixed(1)} cm<br>GCT (kolor): ${v.gct.toFixed(0)} ms`), hovertemplate: '%{text}<extra></extra>',
+                    marker: { size: vB.map(v => v.vo * 2.0), sizemode: 'diameter', color: vB.map(v => v.gct), colorscale: 'Viridis', showscale: true, colorbar: { title: 'GCT', thickness: 10, len: 0.85, x: 1.02 } }
+                }], { title: { text: 'Biomechanika w czasie', x: 0 }, xaxis: { title: 'Data' }, yaxis: { title: 'Tempo (min/km)', autorange: 'reversed' }, margin: { t: 60, b: 40, l: 45, r: 50 } });
+            } else this.empty('chart-biomech', 'Brak danych z dynamiki biegu');
+        },
+
+        reset() {
+            if (this._onResize) { window.removeEventListener('resize', this._onResize); this._onResize = null; }
+            this.dataLoaded = false; this.data = null; this.k = {};
+            CHART_IDS.forEach(id => { const el = document.getElementById(id); if (el) Plotly.purge(el); });
+        }
+    }));
+});
+</script>
 </body>
 </html>
