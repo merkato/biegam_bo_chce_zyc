@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import store
 from conftest import EMAIL, TODAY
@@ -84,11 +84,50 @@ def test_missing_health_data_and_profile(analyze):
     assert k["bmi"] is None and k["weight"] is None and k["garmin_10k"] is None
 
 
-def test_no_runs_in_range_is_404(analyze):
-    # dane testowe nie mają biegów w dni z ordinal % 7 == 1
-    offset = next(o for o in range(1, 8) if (TODAY - timedelta(days=o)).toordinal() % 7 == 1)
-    r = analyze(days=0, end_offset=offset)
+def _offset_for(remainder14: int) -> int:
+    return next(o for o in range(1, 15) if (TODAY - timedelta(days=o)).toordinal() % 14 == remainder14)
+
+
+def test_only_excluded_types_in_range_is_404(analyze):
+    # ordinal % 14 == 13: tylko rower szosowy i bieg na stadionie – oba pomijane
+    r = analyze(days=0, end_offset=_offset_for(13))
     assert r.status_code == 404, r.text
+
+
+def test_day_with_only_hike_counts_load_but_not_running(analyze):
+    r = analyze(days=0, end_offset=_offset_for(1))
+    assert r.status_code == 200, r.text
+    j = r.json()
+    assert j["hm_z"] and max(max(row) for row in j["hm_z"]) > 0      # wędrówka jest w obciążeniu
+    assert j["fitness"]["run_dates"] == []                            # ale nie w analizach biegowych
+    assert all(p is None for p in j["pace"])
+
+
+def test_load_includes_walks_hikes_and_bike_only(analyze):
+    j = analyze(days=60).json()
+    k = j["kpi"]
+    assert 0 < k["load_other_pct"] < 100
+    by_date = dict(zip(j["dates"], j["pace"]))
+    trimp_days = {d for d, w, z in _heatmap_days(j) if z > 0}
+    for off in (_offset_for(1), _offset_for(3), _offset_for(6)):     # wędrówka, rowerek, marsz
+        d = str(TODAY - timedelta(days=off))
+        assert d in trimp_days and by_date[d] is None, d
+    assert str(TODAY - timedelta(days=_offset_for(13))) not in trimp_days   # pomijane typy
+    run_dates = set(j["fitness"]["run_dates"])
+    assert all(date.fromisoformat(d).toordinal() % 7 in (0, 2, 4, 5) for d in run_dates)   # tylko dni biegowe
+
+
+def _heatmap_days(j):
+    for col, week in enumerate(j["hm_x"]):
+        monday = date.fromisoformat(week)
+        for dow in range(7):
+            yield str(monday + timedelta(days=dow)), week, j["hm_z"][dow][col]
+
+
+def test_hr_cap_counts_all_training_types(analyze):
+    k = analyze(days=90, hr_cap=160).json()["kpi"]["hr_cap"]
+    assert "wędrówka" in k["over_types"]          # wędrówka z tętnem 165
+    assert not {"cycling", "track_running"} & set(k["over_types"])   # rower szosowy (170) i stadion pomijane
 
 
 def test_low_vdot_does_not_crash(analyze):

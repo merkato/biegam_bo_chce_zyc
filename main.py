@@ -114,7 +114,7 @@ def _analyze(email: str, password: str, start: date, end: date, user_hr_rest, us
     # HR max z całej historii biegów w bazie (rok) – im więcej biegów, tym pewniej
     year_ago = (end - timedelta(days=365)).isoformat()
     max_hr_history = [a.get("maxHR") for a in store.load_activities(email, year_ago, end.isoformat())
-                      if "running" in str((a.get("activityType") or {}).get("typeKey", ""))]
+                      if (a.get("activityType") or {}).get("typeKey") in analysis.RUN_TYPES]
 
     try:
         result = analysis.analyze(

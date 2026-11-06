@@ -159,7 +159,8 @@
                 <h3>Obciążenie</h3>
                 <div class="big"><span x-text="k.ctl ?? '—'"></span> <span class="unit">CTL</span></div>
                 <div class="sub">Forma (TSB): <b x-text="sign(k.tsb)"></b> — <span x-text="tsbText()"></span><br>
-                    Przyrost CTL: <b x-text="sign(k.ramp)"></b>/tydz.<span x-show="k.ramp > 5" class="down"> — za szybko</span></div>
+                    Przyrost CTL: <b x-text="sign(k.ramp)"></b>/tydz.<span x-show="k.ramp > 5" class="down"> — za szybko</span>
+                    <template x-if="k.load_other_pct"><span><br>Marsze, wędrówki, rowerek: <b x-text="k.load_other_pct + '%'"></b> obciążenia (4 tyg.)</span></template></div>
             </div>
             <div class="card kpi" :class="k.rhr_alert ? 'alert' : ''">
                 <h3>Tętno spoczynkowe</h3>
@@ -188,7 +189,7 @@
             <template x-if="k.hr_cap">
                 <div class="card kpi" :class="k.hr_cap.over ? 'alert' : 'good'">
                     <h3>Limit tętna <span x-text="k.hr_cap.cap"></span></h3>
-                    <div class="big"><span x-text="k.hr_cap.over"></span> <span class="unit">z <span x-text="k.hr_cap.runs"></span> biegów ponad limit</span></div>
+                    <div class="big"><span x-text="k.hr_cap.over"></span> <span class="unit">z <span x-text="k.hr_cap.n"></span> treningów ponad limit</span></div>
                     <div class="sub">Najwyższe tętno: <b x-text="k.hr_cap.max_seen"></b><span x-show="k.hr_cap.last_over"> · ostatnio <span x-text="k.hr_cap.last_over"></span></span></div>
                 </div>
             </template>
@@ -476,13 +477,18 @@ document.addEventListener('alpine:init', () => {
             } else this.empty('chart-weight', 'Brak ważeń w Garmin Connect');
 
             // LIMIT TĘTNA
-            if (this.k.hr_cap && F.max_hr_run.length) {
+            const C = data.cap_chart;
+            if (this.k.hr_cap && C && C.dates.length) {
                 const cap = this.k.hr_cap.cap;
                 this.renderPlot('chart-cap', [
-                    { x: F.run_dates, y: F.max_hr_run, mode: 'markers', name: 'Max HR biegu', marker: {size: 8, color: F.max_hr_run.map(v => v > cap ? '#d62728' : '#2ca02c')} },
-                    { x: F.run_dates, y: F.avg_hr_run, mode: 'markers', name: 'Średnie HR', marker: {size: 6, color: 'rgba(127,127,127,0.5)'} },
+                    { x: C.dates, y: C.max_hr, mode: 'markers', name: 'Max HR', customdata: C.type,
+                      hovertemplate: '%{x} · %{customdata}<br>max %{y:.0f} bpm<extra></extra>',
+                      marker: {size: 8, color: C.max_hr.map(v => v > cap ? '#d62728' : '#2ca02c')} },
+                    { x: C.dates, y: C.avg_hr, mode: 'markers', name: 'Średnie HR', customdata: C.type,
+                      hovertemplate: '%{x} · %{customdata}<br>średnio %{y:.0f} bpm<extra></extra>',
+                      marker: {size: 6, color: 'rgba(127,127,127,0.5)'} },
                 ], {
-                    title: { text: `Tętno na biegach vs limit ${cap}`, x: 0 }, legend: topLegend, yaxis: { title: 'bpm' },
+                    title: { text: `Tętno na treningach vs limit ${cap}`, x: 0 }, legend: topLegend, yaxis: { title: 'bpm' },
                     shapes: [{ type: 'line', xref: 'paper', x0: 0, x1: 1, y0: cap, y1: cap, line: {color: '#d62728', dash: 'dash'} }],
                     margin: { t: 75, b: 40, l: 45, r: 15 }
                 });
@@ -579,7 +585,7 @@ document.addEventListener('alpine:init', () => {
                     'Wartości ujemne: druga połowa łatwiejsza (np. z górki, wolniejszy start).'] },
                 { id: 'chart-endurance', title: 'Obciążenie i forma (CTL / ATL / TSB)', how: [
                     '<b>CTL</b> – baza (średnie obciążenie ~42 dni), <b>ATL</b> – zmęczenie (~7 dni), <b>TSB</b> = wczorajsze CTL − ATL, czyli forma.',
-                    'TSB: &lt; −25 duże zmęczenie, −25…−10 budowanie formy, −10…5 neutralnie, &gt; 5 świeżość. Słupki – Training Effect z zegarka.',
+                    'TSB: &lt; −25 duże zmęczenie, −25…−10 budowanie formy, −10…5 neutralnie, &gt; 5 świeżość. Słupki – Training Effect z zegarka. Obciążenie liczone z biegów, marszów, wędrówek i rowerka stacjonarnego.',
                     'Przyrost CTL powyżej ~5 na tydzień zwiększa ryzyko przeciążenia. Za kreską „dziś” – spadek przy braku treningów.'] },
                 { id: 'chart-ef', title: 'Efektywność (EF) vs HRV', how: [
                     '<b>EF</b> – moc biegowa na uderzenie serca (wyżej = lepiej). <b>HRV</b> – zmienność rytmu serca w nocy, średnia 7 dni.',
@@ -592,9 +598,9 @@ document.addEventListener('alpine:init', () => {
                     'Zielony pas – waga odpowiadająca prawidłowemu BMI dla wieku (WHO 18,5–24,9; dla 65+ przyjęto 23–27).',
                     'Bezpieczne tempo zmiany: ok. 0,5–1% masy ciała na tydzień; przy chudnięciu pilnuj masy mięśniowej.'] },
             ];
-            if (k.hr_cap) list.push({ id: 'chart-cap', title: `Tętno na biegach vs limit ${k.hr_cap.cap}`, how: [
-                'Każdy bieg: kolorowa kropka – maksymalne tętno, szara – średnie. Przerywana linia – limit od lekarza.',
-                '<b>Czerwone</b> – bieg, w którym tętno przekroczyło limit. Pojedyncze skoki mogą być błędem czujnika nadgarstkowego.'] });
+            if (k.hr_cap) list.push({ id: 'chart-cap', title: `Tętno na treningach vs limit ${k.hr_cap.cap}`, how: [
+                'Każdy trening (bieg, marsz, wędrówka, rowerek): kolorowa kropka – maksymalne tętno, szara – średnie. Przerywana linia – limit od lekarza.',
+                '<b>Czerwone</b> – trening, w którym tętno przekroczyło limit. Pojedyncze skoki mogą być błędem czujnika nadgarstkowego.'] });
             return list.filter(c => { const el = document.getElementById(c.id); return el && el.data; });
         },
 
@@ -604,11 +610,11 @@ document.addEventListener('alpine:init', () => {
             if (k.vdot != null) out.push(`Forma: VDOT <b>${k.vdot}</b>${k.vdot_delta_28d != null ? ` (${s(k.vdot_delta_28d)} w 4 tyg.)` : ''}; prognoza 10 km <b>${k.own_10k || '—'}</b>, półmaraton <b>${k.own_hm || '—'}</b> (Garmin: ${k.garmin_10k || '—'} / ${k.garmin_hm || '—'}).`);
             if (k.pace_ref) out.push(`Wydolność tlenowa: <b>${k.pace_ref} min/km</b> przy ${k.hr_ref} bpm${k.pace_ref_delta_s_28d ? ` – ${k.pace_ref_delta_s_28d < 0 ? 'szybciej' : 'wolniej'} o ${Math.abs(k.pace_ref_delta_s_28d)} s/km niż 4 tyg. temu` : ''}.`);
             if (k.decoupling != null) out.push(`Dryf tętna na długich biegach: <b>${k.decoupling}%</b> – ${k.decoupling < 5 ? 'solidna baza' : (k.decoupling <= 10 ? 'baza do budowy' : 'biegi za długie lub za mocne na obecną formę')}.`);
-            if (k.ctl != null) out.push(`Obciążenie: CTL <b>${k.ctl}</b>, forma (TSB) <b>${s(k.tsb)}</b> – ${this.tsbText()}${k.ramp > 5 ? '; <b>przyrost obciążenia za szybki</b>' : ''}.`);
+            if (k.ctl != null) out.push(`Obciążenie: CTL <b>${k.ctl}</b>, forma (TSB) <b>${s(k.tsb)}</b> – ${this.tsbText()}${k.ramp > 5 ? '; <b>przyrost obciążenia za szybki</b>' : ''}${k.load_other_pct ? `; marsze, wędrówki i rowerek: ${k.load_other_pct}% obciążenia z 4 tyg.` : ''}.`);
             if (k.rhr_7d != null) out.push(`Tętno spoczynkowe: <b>${k.rhr_7d}</b> (norma 60 dni: ${k.rhr_60d ?? '—'})${k.rhr_alert ? ` – <b>ostatnie 3 dni ${k.rhr_3d}, o 5+ powyżej normy</b>` : ''}.`);
             if (k.weight != null) out.push(`Waga: <b>${k.weight} kg</b> (${s(k.weight_rate)} kg/tydz.)${k.bmi ? `, BMI <b>${k.bmi}</b> (cel ${k.bmi_band.join('–')})` : ''}${k.target_kg ? `; do celu ${k.target_kg} kg${k.target_eta_weeks ? `, ok. ${k.target_eta_weeks} tyg.` : ''}` : ''}${k.weight_rate < 0 && k.muscle_rate < 0 ? '; <b>spada też masa mięśniowa</b>' : ''}.`);
             if (k.waist) out.push(`Obwód talii: <b>${k.waist.waist_cm} cm</b> – ryzyko ${k.waist.risk}${k.waist.whtr ? `, talia/wzrost ${k.waist.whtr}` : ''}.`);
-            if (k.hr_cap) out.push(`Limit tętna ${k.hr_cap.cap}: przekroczony w <b>${k.hr_cap.over} z ${k.hr_cap.runs}</b> biegów${k.hr_cap.last_over ? ` (ostatnio ${k.hr_cap.last_over})` : ''}.`);
+            if (k.hr_cap) out.push(`Limit tętna ${k.hr_cap.cap}: przekroczony w <b>${k.hr_cap.over} z ${k.hr_cap.n}</b> treningów${k.hr_cap.over_types && k.hr_cap.over_types.length ? ` (${k.hr_cap.over_types.join(', ')})` : ''}${k.hr_cap.last_over ? `, ostatnio ${k.hr_cap.last_over}` : ''}.`);
             return out.map(t => t.replace(/\.\.$/, '.'));
         },
 
@@ -626,7 +632,7 @@ document.addEventListener('alpine:init', () => {
             add('Waga', k.weight != null ? k.weight + ' kg' : null, `${s(k.weight_rate)} kg/tydz.${k.body_fat ? ' · tkanka tłuszczowa ' + k.body_fat + '%' : ''}`);
             add('BMI', k.bmi, k.bmi_note || '');
             if (k.waist) add('Obwód talii', k.waist.waist_cm + ' cm', `ryzyko ${k.waist.risk}${k.waist.whtr ? ' · talia/wzrost ' + k.waist.whtr : ''}`);
-            if (k.hr_cap) add(`Limit tętna ${k.hr_cap.cap}`, `${k.hr_cap.over} / ${k.hr_cap.runs}`, `biegów ponad limit · najwyższe tętno ${k.hr_cap.max_seen ?? '—'}`);
+            if (k.hr_cap) add(`Limit tętna ${k.hr_cap.cap}`, `${k.hr_cap.over} / ${k.hr_cap.n}`, `treningów ponad limit · najwyższe tętno ${k.hr_cap.max_seen ?? '—'}`);
             return rows;
         },
 
@@ -664,7 +670,8 @@ document.addEventListener('alpine:init', () => {
             pages.push(`<section class="r-page">${head('metodologia')}<div class="r-foot">
                 <p><b>Skąd dane:</b> Garmin Connect (aktywności, szczegóły biegów, HRV, tętno spoczynkowe, waga, prognozy Garmina). Obliczenia lokalnie, bez udziału Garmina.</p>
                 <p><b>VDOT i prognozy:</b> koszt tlenowy tempa wg Danielsa i Gilberta, ułamek wysiłku z rezerwy tętna (Swain), liczone z 5-minutowych odcinków równego biegu z pierwszych ~30 min po rozgrzewce; mediana z 6 tygodni; czasy z tablic VDOT.</p>
-                <p><b>Obciążenie:</b> TRIMP Banistera; CTL/ATL ze stałymi czasowymi 42 i 7 dni; TSB = wczorajsze CTL − ATL.</p>
+                <p><b>Obciążenie:</b> TRIMP Banistera z biegów, marszów, wędrówek i rowerka stacjonarnego; CTL/ATL ze stałymi czasowymi 42 i 7 dni; TSB = wczorajsze CTL − ATL.
+                Analizy tempa, VDOT, dryfu i mocy – tylko bieg zwykły, przełajowy i na bieżni.</p>
                 <p><b>Dryf tętna:</b> stosunek prędkości do tętna w pierwszej i drugiej połowie biegu ≥40 min, po 10 min rozgrzewki, bez marszu i postojów.</p>
                 <p><b>HR max:</b> najwyższe tętno potwierdzone przez co najmniej 3 biegi z ostatniego roku (±3 bpm). <b>HR spoczynkowe:</b> mediana z 30 dni.</p>
                 <p><b>Zdrowie:</b> BMI wg WHO (18,5–24,9; dla 65+ przyjęto 23–27 – przedział najniższego ryzyka w badaniach osób starszych), obwód talii wg IDF/WHO (M: 94/102 cm, K: 80/88 cm), stosunek talii do wzrostu &lt; 0,5.</p>

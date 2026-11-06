@@ -17,6 +17,22 @@ DECOUPLING_MAX_RUNS = 20   # tyle ostatnich długich biegów z zakresu analizuje
 SEG_DETAILS_PER_ANALYSIS = 30   # nowych szczegółów biegów na jedną analizę (ochrona przed banem)
 
 
+# Analizy biegowe (tempo, VDOT, EF, dryf, MMP, biomechanika): tylko te typy.
+RUN_TYPES = frozenset({"running", "trail_running", "treadmill_running"})
+# Obciążenie (TRIMP, CTL/ATL/TSB, mapa treningów) i limit tętna: także marsz,
+# wędrówka i rowerek stacjonarny – serce pracuje tak samo, tylko tempo nie jest biegowe.
+LOAD_TYPES = RUN_TYPES | frozenset({
+    "walking", "casual_walking", "speed_walking", "indoor_walking",
+    "hiking",
+    "indoor_cycling", "virtual_ride",
+})
+TYPE_LABELS = {
+    "running": "bieg", "trail_running": "bieg przełajowy", "treadmill_running": "bieżnia",
+    "walking": "marsz", "casual_walking": "marsz", "speed_walking": "marsz szybki", "indoor_walking": "marsz (bieżnia)",
+    "hiking": "wędrówka", "indoor_cycling": "rowerek", "virtual_ride": "rowerek",
+}
+
+
 class NoData(Exception):
     pass
 
@@ -114,39 +130,43 @@ def analyze(
     if df.empty or 'activityType' not in df.columns:
         raise NoData("Brak aktywności we wskazanym zakresie.")
     df['type_key'] = df['activityType'].apply(lambda x: x.get('typeKey', '') if isinstance(x, dict) else '')
-    runs = df[df['type_key'].str.contains('running', na=False)].copy()
-    runs['date'] = pd.to_datetime(runs['startTimeLocal']).dt.normalize()
-    if runs.empty or not (runs['date'] >= start_ts).any():
-        raise NoData("Brak biegów w wybranym zakresie dat.")
-    runs = runs.sort_values('startTimeLocal')
+    df = df[df['type_key'].isin(LOAD_TYPES)].copy()
+    if not df.empty:
+        df['date'] = pd.to_datetime(df['startTimeLocal']).dt.normalize()
+    if df.empty or not (df['date'] >= start_ts).any():
+        raise NoData("Brak treningów (bieg, marsz, wędrówka, rowerek) w wybranym zakresie dat.")
+    df = df.sort_values('startTimeLocal')
+    df['is_run'] = df['type_key'].isin(RUN_TYPES)
 
-    # --- fizjologia ---
+    max_hr_col = _col(df, 'maxHR', 'maxHeartRateInBeatsPerMinute')
+    pow_col = _col(df, 'averagePower', 'avgPower')
+    hr_col = _col(df, 'averageHR', 'averageHeartRateInBeatsPerMinute', 'averageBpm')
+    spd_col = _col(df, 'averageGradeAdjustedSpeed', 'avgGradeAdjustedSpeed', 'averageSpeed')
+    dur_col = _col(df, 'movingDuration', 'duration')
+    vo_col = _col(df, 'averageVerticalOscillation', 'avgVerticalOscillation')
+    gct_col = _col(df, 'averageGroundContactTime', 'avgGroundContactTime')
+    ae_col, an_col = _col(df, 'aerobicTrainingEffect'), _col(df, 'anaerobicTrainingEffect')
+    vo2_col = _col(df, 'vO2MaxValue', 'vO2MaxPreciseValue')
+
+    num = lambda c: pd.to_numeric(df[c], errors='coerce') if c else pd.Series(np.nan, index=df.index)
+    df['speed'] = num(spd_col).where(lambda s: s > 0)
+    df['dur'] = num(dur_col)
+    df['hr'] = num(hr_col)
+    df['pow'] = num(pow_col)
+    df['EF'] = df['pow'] / df['hr']
+    df['max_hr'] = num(max_hr_col)
+    df['vo'], df['gct'], df['ae'], df['an'], df['vo2'] = num(vo_col), num(gct_col), num(ae_col), num(an_col), num(vo2_col)
+
+    # --- fizjologia (HR max tylko z biegów: tam tętno dochodzi najwyżej) ---
     hr_rest = user_hr_rest if user_hr_rest is not None else resting_hr_from_daily(daily_rows)
-    max_hr_col = _col(runs, 'maxHR', 'maxHeartRateInBeatsPerMinute')
-    run_max = pd.to_numeric(runs[max_hr_col], errors='coerce').tolist() if max_hr_col else []
-    hr_max_auto = M.robust_max_hr(list(max_hr_history or []) + run_max)
+    hr_max_auto = M.robust_max_hr(list(max_hr_history or []) + df.loc[df['is_run'], 'max_hr'].tolist())
     hr_max = user_hr_max if user_hr_max is not None else (hr_max_auto or 185)
     hr_max = max(hr_max, hr_rest + 20)
     hr_ref = hr_cap or int(round(hr_rest + 0.65 * (hr_max - hr_rest)))
 
-    pow_col = _col(runs, 'averagePower', 'avgPower')
-    hr_col = _col(runs, 'averageHR', 'averageHeartRateInBeatsPerMinute', 'averageBpm')
-    spd_col = _col(runs, 'averageGradeAdjustedSpeed', 'avgGradeAdjustedSpeed', 'averageSpeed')
-    dur_col = _col(runs, 'movingDuration', 'duration')
-    vo_col = _col(runs, 'averageVerticalOscillation', 'avgVerticalOscillation')
-    gct_col = _col(runs, 'averageGroundContactTime', 'avgGroundContactTime')
-    ae_col, an_col = _col(runs, 'aerobicTrainingEffect'), _col(runs, 'anaerobicTrainingEffect')
-    vo2_col = _col(runs, 'vO2MaxValue', 'vO2MaxPreciseValue')
-
-    num = lambda c: pd.to_numeric(runs[c], errors='coerce') if c else pd.Series(np.nan, index=runs.index)
-    for c in (vo_col, gct_col, ae_col, an_col):
-        if c: runs[c] = num(c)
-    runs['speed'] = num(spd_col).where(lambda s: s > 0)
-    runs['dur'] = num(dur_col)
-    runs['hr'] = num(hr_col)
-    runs['pow'] = num(pow_col)
-    runs['EF'] = runs['pow'] / runs['hr']
-    runs['trimp'] = [calculate_trimp(h, d, hr_rest, hr_max) for h, d in zip(runs['hr'], runs['dur'])]
+    # TRIMP dla każdej aktywności obciążeniowej (bez tętna = 0)
+    df['trimp'] = [calculate_trimp(h, d, hr_rest, hr_max) for h, d in zip(df['hr'], df['dur'])]
+    runs = df[df['is_run']].copy()
 
     # wskaźniki per bieg (tylko równe biegi >= 20 min)
     steady = runs['dur'] >= 20 * 60
@@ -177,22 +197,22 @@ def analyze(
             if spd:
                 runs.at[idx, 'spd_ref'], runs.at[idx, 'ref_src'] = spd, 'seg'
 
-    # --- obciążenie: od pierwszego biegu (rozruch) do +21 dni ---
+    # --- dane dzienne: obciążenie ze wszystkich aktywności, reszta tylko z biegów ---
     runs['sd'] = runs['speed'] * runs['dur']
-    by_day = runs.groupby('date')
+    by_run_day = runs.groupby('date')
+    by_day = df.groupby('date')
     daily = pd.DataFrame({
         'trimp': by_day['trimp'].sum(),
+        'ae': by_day['ae'].sum(min_count=1), 'an': by_day['an'].sum(min_count=1),
+    }).join(pd.DataFrame({
         # tempo dnia ważone czasem biegu (a nie średnia temp)
-        'speed': by_day['sd'].sum(min_count=1) / runs.dropna(subset=['sd']).groupby('date')['dur'].sum(),
-        'hr': by_day['hr'].mean(), 'pow': by_day['pow'].mean(), 'EF': by_day['EF'].mean(),
-        'vo': by_day[vo_col].mean() if vo_col else np.nan,
-        'gct': by_day[gct_col].mean() if gct_col else np.nan,
-        'ae': by_day[ae_col].sum() if ae_col else np.nan,
-        'an': by_day[an_col].sum() if an_col else np.nan,
-    })
+        'speed': by_run_day['sd'].sum(min_count=1) / runs.dropna(subset=['sd']).groupby('date')['dur'].sum(),
+        'hr': by_run_day['hr'].mean(), 'pow': by_run_day['pow'].mean(), 'EF': by_run_day['EF'].mean(),
+        'vo': by_run_day['vo'].mean(), 'gct': by_run_day['gct'].mean(),
+    }), how='left')
     daily['pace'] = 1000 / daily['speed'] / 60
     forecast_end = max(today_ts, end_ts) + pd.Timedelta(days=21)
-    full = pd.date_range(min(runs['date'].min(), start_ts), forecast_end)
+    full = pd.date_range(min(df['date'].min(), start_ts), forecast_end)
     load = M.training_load(daily['trimp'].reindex(full, fill_value=0.0))
     view = pd.date_range(start_ts, forecast_end)
     load = load.reindex(view)
@@ -254,7 +274,7 @@ def analyze(
     vdot_trend = M.rolling_median_by_time(runs['date'], runs['vdot_run'], days=42, min_n=3)
     spd_ref_trend = M.ewm_by_time(runs['date'], runs['spd_ref'], halflife_days=14)
     pace_ref_trend = 1000 / spd_ref_trend / 60
-    vo2_garmin = M.ewm_by_time(runs['date'], num(vo2_col), 1) if vo2_col else pd.Series(dtype=float)
+    vo2_garmin = M.ewm_by_time(runs['date'], runs['vo2'], 1) if vo2_col else pd.Series(dtype=float)
     vdot_now = _last(vdot_trend)
     t10_now = M.race_time_from_vdot(vdot_now, M.KM10) if vdot_now else None
     thm_now = M.race_time_from_vdot(vdot_now, M.HM) if vdot_now else None
@@ -271,11 +291,9 @@ def analyze(
         "run_dates": _ds(r_view['date']),
         "vdot_run": _clean(r_view['vdot_run']),
         "vdot_src": [v if isinstance(v, str) else None for v in r_view['vdot_src']],
-        "vo2_garmin_run": _clean(num(vo2_col)[r_view.index]) if vo2_col else [],
+        "vo2_garmin_run": _clean(r_view['vo2']) if vo2_col else [],
         "pace_ref_run": _clean(1000 / r_view['spd_ref'] / 60),
         "ref_src": [v if isinstance(v, str) else None for v in r_view['ref_src']],
-        "max_hr_run": _clean(pd.to_numeric(r_view[max_hr_col], errors='coerce')) if max_hr_col else [],
-        "avg_hr_run": _clean(r_view['hr']),
         "trend_dates": _ds(vdot_trend.index[vdot_trend.index >= start_ts]),
         "vdot_trend": _clean(vdot_trend[vdot_trend.index >= start_ts]),
         "own_10k": _clean([v for v, d in zip(own_10k, vdot_trend.index) if d >= start_ts]),
@@ -292,14 +310,24 @@ def analyze(
     # --- zdrowie: tętno spoczynkowe, waga, BMI, talia ---
     health, kpi_health = _health(dr, profile, start_ts, end, waist_cm)
 
-    # --- limit tętna ---
-    cap = None
+    # --- limit tętna: wszystkie aktywności (podejście pod górę też może przekroczyć limit) ---
+    a_view = df[df['date'] >= start_ts]
+    cap, cap_chart = None, None
     if hr_cap and max_hr_col:
-        mx = pd.to_numeric(r_view[max_hr_col], errors='coerce')
-        over = r_view[mx > hr_cap]
-        cap = {"cap": hr_cap, "runs": int(mx.notna().sum()), "over": int(len(over)),
+        mx = a_view['max_hr']
+        over = a_view[mx > hr_cap]
+        cap = {"cap": hr_cap, "n": int(mx.notna().sum()), "over": int(len(over)),
                "last_over": over['date'].max().strftime('%Y-%m-%d') if len(over) else None,
-               "max_seen": int(mx.max()) if mx.notna().any() else None}
+               "max_seen": int(mx.max()) if mx.notna().any() else None,
+               "over_types": sorted({TYPE_LABELS.get(t, t) for t in over['type_key']})}
+        cap_chart = {"dates": _ds(a_view['date']), "max_hr": _clean(mx), "avg_hr": _clean(a_view['hr']),
+                     "type": [TYPE_LABELS.get(t, t) for t in a_view['type_key']]}
+
+    # udział marszów/wędrówek/rowerka w obciążeniu z ostatnich 4 tygodni
+    ref_day = min(today_ts, end_ts)
+    last4 = df[(df['date'] > ref_day - pd.Timedelta(days=28)) & (df['date'] <= ref_day)]
+    total4 = float(last4['trimp'].sum())
+    other_pct = round(100 * float(last4.loc[~last4['is_run'], 'trimp'].sum()) / total4) if total4 > 0 else None
 
     ctl_now = _last(load['CTL'][load.index <= today_ts])
     kpi = {
@@ -320,6 +348,7 @@ def analyze(
         "tsb": _round(_last(load['TSB'][load.index <= today_ts])),
         "ramp": _round(_last(load['ramp'][load.index <= today_ts])),
         "hr_cap": cap,
+        "load_other_pct": other_pct,
         "decoupling": round(float(np.median(dec_recent)), 1) if dec_recent else None,
         "decoupling_n": len(dec_recent),
         **kpi_health,
@@ -341,6 +370,7 @@ def analyze(
         "hm_z": heatmap_z, "hm_x": heatmap_x, "hm_y": ['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Ndz'],
         "mmp_labels": ['10s', '30s', '1 min', '5 min', '20 min', '1 godz.'], "mmp_vals": mmp_vals,
         "fitness": fitness,
+        "cap_chart": cap_chart,
         "health": health,
     }
 

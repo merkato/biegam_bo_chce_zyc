@@ -73,6 +73,28 @@ def run_params(act_id: int, drift_pct: float = 3.0) -> dict:
             "avg_hr": float(np.mean([r[1] for r in rows])), "avg_speed": float(np.mean([r[2] for r in rows]))}
 
 
+def other_activities(d: date) -> list[dict]:
+    """Treningi inne niż bieg (id = ordinal*10 + 5..8, żeby nie kolidowały z biegami).
+
+    Dni (ordinal % 14): 1 i 8 – wędrówka (czasem tętno ponad limit 160), 3 i 10 – rowerek
+    stacjonarny + siłownia, 6 – marsz, 13 – tylko typy pomijane (rower szosowy, stadion).
+    """
+    o, r = d.toordinal(), d.toordinal() % 14
+    base = lambda k, t, hr, mx, dur: {
+        "activityId": o * 10 + k, "activityType": {"typeKey": t}, "startTimeLocal": f"{d} 17:00:00",
+        "averageHR": hr, "maxHR": mx, "duration": dur, "movingDuration": dur, "averageSpeed": 1.3,
+        "aerobicTrainingEffect": 2.0, "anaerobicTrainingEffect": 0.0}
+    if r in (1, 8):
+        return [base(5, "hiking", 112.0, 165.0 if o % 28 == 1 else 135.0, 7200)]
+    if r in (3, 10):
+        return [base(6, "indoor_cycling", 118.0, 140.0, 2700), base(7, "strength_training", 100.0, 150.0, 1800)]
+    if r == 6:
+        return [base(5, "walking", 98.0, 115.0, 3600)]
+    if r == 13:
+        return [base(5, "cycling", 130.0, 170.0, 5400), base(6, "track_running", 150.0, 175.0, 2400)]
+    return []
+
+
 def _days(a: str, b: str):
     d = date.fromisoformat(a)
     while d <= date.fromisoformat(b):
@@ -121,6 +143,7 @@ class FakeGarmin:
         self._call("acts", a, b)
         out = []
         for d in _days(a, b):
+            out.extend(other_activities(d))
             if d.toordinal() % 7 not in (0, 2, 4, 5):
                 continue
             for k in range(2 if d.toordinal() % 35 == 0 else 1):   # czasem dwa biegi dziennie
